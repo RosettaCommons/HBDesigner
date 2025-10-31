@@ -34,4 +34,5 @@ MANIFEST
 .pypirc
 
 # Ignore slurm scripts
-slurm*/*
+*slurm*/*
+*.sh
