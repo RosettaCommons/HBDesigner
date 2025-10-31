@@ -2,9 +2,8 @@ from dataclasses import dataclass, field
 
 from hbdesigner.utils import StrictDataClass
 
-
 @dataclass
-class HBDesignerModelConfig(StrictDataClass):
+class HBPackerModelConfig(StrictDataClass):
     """HBDesigner model configuration.
 
     Attributes:
@@ -142,6 +141,82 @@ class HBDesignerModelConfig(StrictDataClass):
 
 
 @dataclass
+class HBDesignerModelConfig(StrictDataClass):
+    """HBDesigner model configuration.
+
+    Attributes:
+        pn_dim (int): Hidden dimension size for protein nodes. Defaults to 128.
+        pe_dim (int): Hidden dimension size for protein edges. Defaults to 128.
+        pg_dim (int): Hidden dimension size for protein graph nodes. Defaults to 256.
+        gn_dim (int): Hidden dimension size for gig nodes. Defaults to 64.
+        ge_dim (int): Hidden dimension size for gig edges. Defaults to 64.
+        gg_dim (int): Hidden dimension size for gig graph nodes. Defaults to 128.
+        mlp_inner_dim (int): Hidden dimesion for inner layers of FFWD layer MLPs. Defaults to 128.
+        knn_k (int): Number of nearest neighbors to use in protein graph. Defaults to 30.
+        num_protein_encoder_layers (int): Number of MPNN layers in ProteinEncoder. Defaults to 3.
+        max_seq_sep (int): Maximum separation in sequence space for positional
+            encodings. Defaults to 32.
+        num_rbf (int): Number of RBF encodings to use. Defaults to 16.
+        num_mlp_layers (int): Number of MLP layers. Defaults to 3.
+        bb_noise (float): Backbone coordinate noise added during training (in A). Defaults to 0.0.
+        net_res_nll_weight (float): Weight for the residue prediction NLL
+            loss. Defaults to 1.0.
+        seq_nll_weight (float): Weight for the sequence prediction NLL loss.
+            Defaults to 1.0.
+        loss_type (str): Which loss formula to use. Defaults to "nll". Options are ("nll", "focal").
+        focal_gamma (float): Gamma hyperparameter for focal loss. Defaults to 0.0. Higher means stronger modulation away from CE loss.
+        nll_smoothing (float): Weight for NLL label smoothing. Defaults to 0.0.
+        data_location (str): Path to training dataset. Defaults to "".
+        inter_weight (float): Sampling weight for interface samples relative to intra-chain samples. Defaults to 1.0.
+        hbnet_pct (float): Sampling pct for using hbnet samples, if available. Defaults to 0.0.
+        max_res (int): Maximum size network to consider, inclusive. Defaults to 6.
+        min_res (int): Minimum size network to consider, inclusive. Defaults to 2.
+        guide_atom_pct (float): Percent of samples to use guide atom conditioning. Default is 0.0.
+        guide_atom_sigma (float): Sigma of normal distribution for guide atom placement. Default is 1.0.
+        seq_cond_pct (float): Percent of samples to use expected seq conditioning. Default is 0.0.
+        seq_cond_unk_pct (float): Percent of samples to partially mask for seq conditioning. Default is 0.0.
+    """
+
+    # Model architecture
+    pn_dim: int = 128
+    pe_dim: int = 128
+    pg_dim: int = 256
+    gn_dim: int = 64
+    ge_dim: int = 64
+    gg_dim: int = 128
+    mlp_inner_dim: int = 128
+    knn_k: int = 30
+    num_protein_encoder_layers: int = 3
+    max_seq_sep: int = 32
+    num_rbf: int = 16
+    num_mlp_layers: int = 3
+
+    # Loss weights
+    net_res_nll_weight: float = 1.0
+    seq_nll_weight: float = 2.0
+    nll_smoothing: float = 0.0
+    loss_type: str = "nll"
+    focal_gamma: float = 0.0
+
+    # Data configuration
+    data_location: str = ""
+    inter_weight: float = 1.0
+    hbnet_pct: float = 0.0
+    batch_size: int = 10_000
+    max_res: int = 6
+    min_res: int = 2
+    bb_noise: float = 0.0
+    rescore: bool = False
+    rescore_filter: bool = False
+
+    # Conditioning info
+    guide_atom_pct: float = 0.0
+    guide_atom_sigma: float = 1.0
+    seq_cond_pct: float = 0.0
+    seq_cond_unk_pct: float = 0.0
+
+
+@dataclass
 class FrankenPackerModelConfig(StrictDataClass):
     """FrankenPacker model configuration.
 
@@ -234,15 +309,8 @@ class ModelConfig(StrictDataClass):
     Attributes:
         model_name (str): The name of the model to use. Defaults to "Uniform".
         dropout (float): Dropout rate. Defaults to 0.1.
-        gig_matcher (GIGMatcherModelConfig): The GIGMatcher model
-            configuration.
-        hbnet (HBNetModelConfig): The HBNet model configuration.
-        seq_design (SeqDesignModelConfig): The SeqDesign model
-            configuration.
         frankenpacker (FrankenPackerModelConfig): The FrankenPacker model
             configuration.
-        gigpacker (GIGPackerModelConfig): The GIGPacker model configuration.
-        gigdesigner (GIGDesignerModelConfig): The GIGDesigner model configuration.
     """
 
     model_name: str = "Uniform"

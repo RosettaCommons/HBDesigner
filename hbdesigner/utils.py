@@ -12,6 +12,10 @@ from torch.optim.lr_scheduler import LRScheduler
 
 from hbdesigner.data.features import Array
 
+from dataclasses import fields, is_dataclass
+from typing import Optional
+from omegaconf import MISSING
+
 
 class StrictDataClass:
     """A dataclass that raises an error if any field is created outside of the __init__ method, while
@@ -27,6 +31,30 @@ class StrictDataClass:
                 f" '{type(self).__name__}' is a StrictDataClass object."
                 f" Attributes can only be defined in the class definition."
             )
+
+
+def init_empty(cfg: StrictDataClass) -> StrictDataClass:
+    """Initialize a StrictDataClass with all fields set to MISSING,
+    including nested dataclasses.
+
+    This is meant to be used by a user to provide some configuration
+    using default values while overwritting only the fields set by
+    the user.
+
+    Args:
+        cfg (StrictDataClass): The config whose attributes should be used.
+
+    Returns:
+        StrictDataClass: A config with the same attributes as cfg, but
+            all set to MISSING.
+    """
+    for f in fields(cfg):
+        if is_dataclass(f.type):
+            setattr(cfg, f.name, init_empty(f.type()))
+        else:
+            setattr(cfg, f.name, MISSING)
+
+    return cfg
 
 
 def create_logger(

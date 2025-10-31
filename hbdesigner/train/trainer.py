@@ -15,7 +15,8 @@ from torch.utils.data.distributed import DistributedSampler
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-from hbdesigner.model.hbdesign_model import HBDesigner3
+from hbdesigner.model.hbdesign_model import HBDesigner
+from hbdesigner.model.hbpacker_model import HBPacker
 from hbdesigner.train.config import TrainConfig
 from hbdesigner.utils import (
     NoamLR,
@@ -27,7 +28,8 @@ from hbdesigner.utils import (
 )
 
 MODELS = {
-    "HBDesigner3": HBDesigner3,
+    "HBDesigner": HBDesigner,
+    "HBPacker": HBPacker,
 }
 
 class SupervisedTrainer:
@@ -448,7 +450,7 @@ class SupervisedTrainer:
             if valid_freq > 0 and (it % valid_freq == 0):
                 if not (skip_initial_validation and it == 0):
                     valid_info = self.validation_loop(
-                        valid_dl, steps=self.cfg.num_validation_gen_steps
+                        valid_dl, steps=self.cfg.num_validation_batches
                     )
                     if self.rank == 0:
                         self.log(valid_info, it, "valid")
@@ -477,7 +479,7 @@ class SupervisedTrainer:
         # Perform final validation.
         if self.rank == 0:
             logger.info("Performing final validation...")
-        final_info = self.validation_loop(valid_dl, steps=self.cfg.num_final_gen_steps)
+        final_info = self.validation_loop(valid_dl, steps=self.cfg.num_final_batches)
 
         # Print and log final_info.
         if self.rank == 0:

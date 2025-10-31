@@ -1,6 +1,5 @@
-from dataclasses import dataclass, field, fields, is_dataclass
+from dataclasses import dataclass, field
 from typing import Optional
-from omegaconf import MISSING
 
 from hbdesigner.model.config import ModelConfig
 from hbdesigner.utils import StrictDataClass
@@ -35,7 +34,6 @@ class OptimizerConfig(StrictDataClass):
     clip_grad_type: str = "norm"
     clip_grad_param: float = 10.0
     adam_eps: float = 1e-8
-
     noam_factor: Optional[float] = 2
     noam_warmup: Optional[int] = 4_000
 
@@ -57,17 +55,14 @@ class TrainConfig(StrictDataClass):
         print_every (Optional[int]): The number of training steps after which to print the
             training loss. If None, loss printing is disabled. Defaults to None.
         num_training_steps (int): The number of training steps. Defaults to 10_000.
-        num_validation_gen_steps (Optional[int]): The number of steps for which to generate
-            graphs during validation. If None, validation is disabled. Defaults to None.
-        num_final_gen_steps (Optional[int]): After training, the number of steps for which
-            to generate graphs. If None, final generation is disabled. Defaults to None.
+        num_validation_batches (Optional[int]): The number of batches to sample during each validation step. If None, validation is run on the full validation set. Defaults to None.
+        num_final_batches (Optional[int]): After training, the number of batches for which
+            to run final validation. If None, final validation is run on the full validation set. Defaults to None.
         num_workers (int): The number of workers to use for creating minibatches. If 0, then
             multiprocessing is disabled. Defaults to 0.
         mixed_precision (bool): Whether to enable automatic mixed precision. Can speed up training and reduce memory usage,
         but may be less stable. Defaults to False.
         git_hash (Optional[str]): The git hash of the current commit. Defaults to None.
-        pickle_mp_messages (bool): Whether to pickle messages sent between processes (only
-            relevant if num_workers > 0). Defaults to False.
         use_ddp (bool): Whether to use distributed data parallel (DDP)
             training. Defaults to False. Note this will override the `device`
             value and requires multiple GPUs.
@@ -75,10 +70,8 @@ class TrainConfig(StrictDataClass):
             This value should equal the number of GPUs to use. Defaults to 2.
         ddp_addr (str): The address of the DDP master process. Defaults to "localhost".
         ddp_port (str): The port of the DDP master process. Defaults to "12345".
-        algo (AlgoConfig): The algorithm configuration for training.
         model (ModelConfig): The model configuration for training.
         opt (OptimizerConfig): The optimizer configuration for training.
-        env (EnvConfig): The environment configuration for training.
     """
 
     desc: str = ""
@@ -89,39 +82,14 @@ class TrainConfig(StrictDataClass):
     checkpoint_every: Optional[int] = None
     print_every: Optional[int] = None
     num_training_steps: int = 10_000
-    num_validation_gen_steps: Optional[int] = None
-    num_final_gen_steps: Optional[int] = None
+    num_validation_batches: Optional[int] = None
+    num_final_batches: Optional[int] = None
     num_workers: int = 0
     mixed_precision: bool = False
     git_hash: Optional[str] = None
-    pickle_mp_messages: bool = False
     use_ddp: bool = False
     ddp_n_procs: int = 2
     ddp_addr: str = "localhost"
     ddp_port: str = "12345"
     model: ModelConfig = field(default_factory=ModelConfig)
     opt: OptimizerConfig = field(default_factory=OptimizerConfig)
-
-
-def init_empty(cfg: StrictDataClass) -> StrictDataClass:
-    """Initialize a StrictDataClass with all fields set to MISSING,
-    including nested dataclasses.
-
-    This is meant to be used by a user to provide some configuration
-    using default values while overwritting only the fields set by
-    the user.
-
-    Args:
-        cfg (StrictDataClass): The config whose attributes should be used.
-
-    Returns:
-        StrictDataClass: A config with the same attributes as cfg, but
-            all set to MISSING.
-    """
-    for f in fields(cfg):
-        if is_dataclass(f.type):
-            setattr(cfg, f.name, init_empty(f.type()))
-        else:
-            setattr(cfg, f.name, MISSING)
-
-    return cfg
