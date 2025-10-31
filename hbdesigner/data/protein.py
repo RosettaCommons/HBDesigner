@@ -6,9 +6,9 @@ import numpy as np
 from Bio.PDB import PDBParser
 from scipy.spatial.distance import cdist
 
-import proteingfn.data.residue_constants as rc
-from proteingfn.data.features import impute_CB
-from proteingfn.utils import get_worker_rng
+import hbdesigner.data.residue_constants as rc
+from hbdesigner.data.features import impute_CB
+from hbdesigner.utils import get_worker_rng
 
 # Complete sequence of chain IDs supported by the PDB format.
 PDB_CHAIN_IDS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"

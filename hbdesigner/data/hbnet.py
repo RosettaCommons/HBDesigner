@@ -26,10 +26,10 @@ from pyrosetta.rosetta.protocols.minimization_packing import MinMover
 from scipy.spatial.distance import cdist
 from torch_scatter import scatter
 
-import proteingfn.data.residue_constants as rc
-from proteingfn.data.features import impute_CB
-from proteingfn.data.protein import Protein
-from proteingfn.scripts.preprocess_gigpacker_data import run_reduce
+import hbdesigner.data.residue_constants as rc
+from hbdesigner.data.features import impute_CB
+from hbdesigner.data.protein import Protein
+from hbdesigner.scripts.preprocess_gigpacker_data import run_reduce
 
 
 def batch_to_proteins(batch: gd.Batch) -> Tuple[List[Protein], List[gd.Data]]:

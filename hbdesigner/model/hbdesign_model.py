@@ -7,8 +7,8 @@ import torch_geometric.nn as gnn
 from torch_scatter import scatter, scatter_max
 import numpy as np
 
-import proteingfn.data.residue_constants as rc
-from proteingfn.data.features import (
+import hbdesigner.data.residue_constants as rc
+from hbdesigner.data.features import (
     impute_CB, 
     scatter_masked_mean, 
     sincos_to_angle, 
@@ -17,11 +17,11 @@ from proteingfn.data.features import (
     normalize_chi, 
     masked_mean,
 )
-from proteingfn.model.layers import (
+from hbdesigner.model.layers import (
     MPNNLayer,
 )
-import proteingfn.data.rigid_utils as ru
-from proteingfn.train.config import TrainConfig
+import hbdesigner.data.rigid_utils as ru
+from hbdesigner.train.config import TrainConfig
 
 
 class HBDesigner3(nn.Module):

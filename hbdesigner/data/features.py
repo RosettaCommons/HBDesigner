@@ -6,8 +6,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch_scatter import scatter
 
-import proteingfn.data.residue_constants as rc
-import proteingfn.data.rigid_utils as ru
+import hbdesigner.data.residue_constants as rc
+import hbdesigner.data.rigid_utils as ru
 
 
 Array = Union[np.ndarray, torch.Tensor]

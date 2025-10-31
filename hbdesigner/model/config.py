@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 
-from proteingfn.utils import StrictDataClass
+from hbdesigner.utils import StrictDataClass
 
 
 @dataclass

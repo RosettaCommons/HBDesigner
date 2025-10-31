@@ -8,12 +8,12 @@ import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
 import torch_geometric.data as gd
 
-import proteingfn.data.residue_constants as rc
-from proteingfn.data.rigid_utils import Rigid, Rotation
-from proteingfn.model.layers import MLP, get_act_fxn
-from proteingfn.model.config import ModelConfig
-from proteingfn.data.protein import Protein
-from proteingfn.data.features import (
+import hbdesigner.data.residue_constants as rc
+from hbdesigner.data.rigid_utils import Rigid, Rotation
+from hbdesigner.model.layers import MLP, get_act_fxn
+from hbdesigner.model.config import ModelConfig
+from hbdesigner.data.protein import Protein
+from hbdesigner.data.features import (
     build_sc_from_chi,
     calc_bb_dihedrals,
     calc_sc_dihedrals,

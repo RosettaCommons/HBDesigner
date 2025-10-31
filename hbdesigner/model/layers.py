@@ -7,9 +7,9 @@ import torch_geometric.nn as gnn
 from torch_scatter import scatter
 from torch.utils.checkpoint import checkpoint
 
-import proteingfn.data.residue_constants as rc
-from proteingfn.data.features import impute_CB
-from proteingfn.data.rigid_utils import Rigid
+import hbdesigner.data.residue_constants as rc
+from hbdesigner.data.features import impute_CB
+from hbdesigner.data.rigid_utils import Rigid
 
 
 def get_act_fxn(act: str) -> Callable:
