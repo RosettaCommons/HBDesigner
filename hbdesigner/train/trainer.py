@@ -26,7 +26,6 @@ from hbdesigner.utils import (
     set_main_process_device,
 )
 
-
 MODELS = {
     "HBDesigner3": HBDesigner3,
 }

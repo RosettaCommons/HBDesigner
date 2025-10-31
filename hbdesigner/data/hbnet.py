@@ -1,11 +1,12 @@
 from copy import deepcopy
 from functools import partial
 from multiprocessing import Pool
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, List, Sequence, Tuple, Optional
 
 import numpy as np
 import pyrosetta
 import time
+import subprocess
 import torch
 import torch_geometric.data as gd
 from pyrosetta import Pose, get_fa_scorefxn
@@ -29,7 +30,9 @@ from torch_scatter import scatter
 import hbdesigner.data.residue_constants as rc
 from hbdesigner.data.features import impute_CB
 from hbdesigner.data.protein import Protein
-from hbdesigner.scripts.preprocess_gigpacker_data import run_reduce
+
+REDUCE_EXE = "/spshared/apps/reduce/reduce_src/reduce"
+HET_DICT = "/spshared/apps/reduce/reduce_wwPDB_het_dict.txt"
 
 
 def batch_to_proteins(batch: gd.Batch) -> Tuple[List[Protein], List[gd.Data]]:
@@ -573,6 +576,45 @@ def run_pdb2pqr(p: Protein) -> Protein:
 
     return Protein.from_pdb_string(out_pdb, discard_Hs=False)
 
+
+def run_reduce(
+    pdb_str: str, his: bool = True, flip: bool = True, database: str = HET_DICT, timeout: Optional[int] = None
+) -> str:
+    """Runs Reduce on a pdb_str
+
+    Args:
+        pdb_str (str): The string of the PDB to run Reduce on.
+        his (bool, optional): If True, include the -HIS argument for Reduce; otherwise, don't include it. Defaults to True.
+        flip (bool, optional): If True, includes the -FLIP argument for Reduce; otherwise, doesn't include it. Defaults to True.
+        database (str, optional): Path to the HETATM database for Reduce. Defaults to HET_DICT.
+        timeout (int, optional): If provided, sets the timeout value for trying to run Reduce. Defaults to None.
+    """
+    # Build the command to run Reduce
+    reduce_cmd = [REDUCE_EXE, "-q", "-DB", database, "-"]
+    if his:
+        reduce_cmd += ["-HIS"]
+    if flip:
+        reduce_cmd += ["-FLIP"]
+    pop = subprocess.Popen(
+        reduce_cmd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+
+    # Pass the string to Reduce
+    if timeout is None:
+        out_pdb = pop.communicate(input=pdb_str)[0]
+    else:
+        # Need a timeout for really large PDBs
+        try:
+            out_pdb = pop.communicate(input=pdb_str, timeout=timeout)[0]
+        except subprocess.TimeoutExpired:
+            pop.kill()
+            raise subprocess.TimeoutExpired
+
+    return out_pdb
 
 def safe_run(p: Protein, mode: str = "pack"):
     """Keeps run from failing due to isolated errors."""

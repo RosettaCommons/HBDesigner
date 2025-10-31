@@ -13,7 +13,6 @@ from hbdesigner.data.features import (
     scatter_masked_mean, 
     sincos_to_angle, 
     get_renamed_coords, 
-    masked_mean, 
     normalize_chi, 
     masked_mean,
 )
@@ -36,7 +35,7 @@ class HBDesigner3(nn.Module):
         super().__init__()
         self.cfg = cfg
         c = cfg.model.hbdesigner
-        self.max_comps = cfg.env.hbnet.max_residues
+        self.max_comps = c.max_res
         self.knn_k = c.knn_k
         self.pack = c.pack
         self.n_atoms = 14 if self.pack else 5
@@ -72,7 +71,7 @@ class HBDesigner3(nn.Module):
         # Packing model doesn't use any conditioning info
         if not self.pack:
             # Step conditioning
-            self.net_res_num_range = self.cfg.env.hbnet.max_residues + 1
+            self.net_res_num_range = c.max_res + 1
             self.net_res_num_linear = nn.Linear(self.net_res_num_range, c.pg_dim)
             self.cond2res_linears = nn.ModuleList(
                 [

@@ -7,10 +7,8 @@ from copy import deepcopy
 from typing import Any, Dict, Optional, Sequence, Tuple, Union
 import time
 import pandas as pd
-
 import networkx as nx
 import numpy as np
-import proteingfn.data.residue_constants as rc
 import torch
 from torch.utils.data import DataLoader, Dataset
 import torch_geometric.data as gd
@@ -22,6 +20,7 @@ from pyrosetta.rosetta.core.import_pose import pose_from_pdbstring
 from pyrosetta.rosetta.core.select.util import calc_sc_neighbors
 from pyrosetta import Pose
 
+import hbdesigner.data.residue_constants as rc
 from hbdesigner.data.features import (
     calc_bb_dihedrals,
     impute_CB,
@@ -38,7 +37,6 @@ from hbdesigner.data.hbnet import (
     calc_seq_rec_batched,
     clear_non_network_res,
     crop_by_distance,
-    get_satisfaction,
 )
 from hbdesigner.model.pippack_model import (
     apply_logits_to_proteins,
@@ -46,9 +44,9 @@ from hbdesigner.model.pippack_model import (
     load_PIPPack,
 )
 from hbdesigner.data.protein import PDB_CHAIN_IDS, Protein
-from hbdesigner.scripts.preprocess_mpnn import load_metadata
+from hbdesigner.scripts.preprocess_asmbs import load_metadata
 from hbdesigner.train.config import TrainConfig, init_empty
-from hbdesigner.train.gfn_trainer import SupervisedTrainer
+from hbdesigner.train.trainer import SupervisedTrainer
 from hbdesigner.utils import cycle, seed_everything, worker_init
 
 
@@ -449,7 +447,7 @@ class HBDesigner3Dataset(torch.utils.data.IterableDataset):
         )
 
         # End of ground-truth features
-        p = p.copy()
+        p = deepcopy(p)
         # Clear any not-yet-decoded res for input aatype
         p.aatype[nll_mask > 0] = rc.restype_num
         aatype = p.aatype
@@ -782,8 +780,8 @@ class HBDesignerTrainer(SupervisedTrainer):
         base.model.model_name = "HBDesigner"
         base.model.hbdesigner.data_location = "/data/pdb_2021aug02"
         base.model.hbdesigner.pack_method = "none"
-        base.env.hbnet.max_residues = 6
-        base.env.hbnet.min_residues = 2
+        base.model.hbdesigner.max_res = 6
+        base.model.hbdesigner.min_res = 2
 
     def setup(self) -> None:
         super().setup()
@@ -1213,7 +1211,6 @@ class HBDesignerTrainer(SupervisedTrainer):
         """
 
 
-        from proteingfn.data.hbnet import biotite_hbond_detect
 
         # Get bonds and energy metrics from Rosetta
         bond_list, rosetta_stats = rosetta_hbond_detect(
@@ -1461,7 +1458,7 @@ class HBDesignerTrainer(SupervisedTrainer):
 
 def build_hbdes3_config_longleaf():
     config: TrainConfig = init_empty(TrainConfig())
-    config.log_dir = f"/users/d/i/dieckhau/dev/hbdes3_logs/{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+    # config.log_dir = f"/users/d/i/dieckhau/dev/hbdes3_logs/{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
     config.device = "cuda:0" if torch.cuda.is_available() else "cpu"
     config.seed = 42
 
@@ -1499,8 +1496,8 @@ def build_hbdes3_config_longleaf():
     )
 
     # Rescore/curation settings
-    config.model.hbdesigner.rescore = True
-    config.model.hbdesigner.rescore_filter = True
+    config.model.hbdesigner.rescore = False
+    config.model.hbdesigner.rescore_filter = False
 
     return config
 
@@ -1567,10 +1564,6 @@ def build_resume_config():
 
     # Make changes (training steps, datasets, etc)
     config.num_training_steps = 500_000
-    # config.opt.opt = 'adam'
-    # config.opt.lr = 1e-3
-    # config.opt.lr_decay = None
-
     return config
 
 
@@ -1578,11 +1571,57 @@ def get_config_from_file(filename):
     assert os.path.isfile(filename), f"Invalid config file {filename} specified."
     return OmegaConf.load(filename)
 
+def build_hbdesigner_config_wout():
+    config: TrainConfig = init_empty(TrainConfig())
+    # config.log_dir = f"/users/d/i/dieckhau/dev/hbdes3_logs/{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+    config.device = "cuda:0" if torch.cuda.is_available() else "cpu"
+    config.seed = 42
+
+    # Training settings
+    config.validate_every = 1_024
+    config.num_validation_gen_steps = 128
+    config.checkpoint_every = 50_000
+    config.num_training_steps = 150_000
+    config.model.hbdesigner.batch_size = 10_000
+    config.num_workers = 24
+    config.print_every = 1
+
+    # Loss and learning rate settings
+    config.opt.opt = "noam"
+    config.opt.adam_eps = 1e-9
+    config.opt.lr_decay = None
+    config.opt.noam_factor = 0.5
+    config.model.hbdesigner.loss_type = "focal"
+    config.model.hbdesigner.focal_gamma = 2.0
+    config.model.hbdesigner.seq_nll_weight = 1.0
+    config.model.hbdesigner.net_res_nll_weight = 1.0
+
+    # Conditioning info
+    config.model.hbdesigner.guide_atom_pct = 0.5
+    config.model.hbdesigner.guide_atom_sigma = 4.0
+    config.model.hbdesigner.seq_cond_pct = 0.2
+    config.model.hbdesigner.seq_cond_unk_pct = 0.5
+
+    # Other model settings
+    config.model.hbdesigner.bb_noise = 0.02
+    config.model.model_name = "HBDesigner3"
+    config.model.hbdesigner.pack = False
+    config.model.hbdesigner.data_location = (
+        "/data/pdb_2021aug02/pdb_2021aug02_hbdesigner4/"
+    )
+
+    # Rescore/curation settings
+    config.model.hbdesigner.rescore = False
+    config.model.hbdesigner.rescore_filter = False
+
+    return config
+
 
 CONFIGS = {
     "resume": build_resume_config,
     "hbdes3_longleaf": build_hbdes3_config_longleaf,
     "hbdes3_pack_longleaf": build_hbdes3_pack_config_longleaf,
+    "hbdesigner_wout": build_hbdesigner_config_wout,
 }
 
 

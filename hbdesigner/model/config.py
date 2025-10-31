@@ -247,12 +247,7 @@ class ModelConfig(StrictDataClass):
 
     model_name: str = "Uniform"
     dropout: float = 0.1
-    gig_matcher: GIGMatcherModelConfig = field(default_factory=GIGMatcherModelConfig)
-    hbnet: HBNetModelConfig = field(default_factory=HBNetModelConfig)
     frankenpacker: FrankenPackerModelConfig = field(
         default_factory=FrankenPackerModelConfig
     )
-    seq_design: SeqDesignModelConfig = field(default_factory=SeqDesignModelConfig)
-    gigpacker: GIGPackerModelConfig = field(default_factory=GIGPackerModelConfig)
-    gigdesigner: GIGDesignerModelConfig = field(default_factory=GIGDesignerModelConfig)
     hbdesigner: HBDesignerModelConfig = field(default_factory=HBDesignerModelConfig)

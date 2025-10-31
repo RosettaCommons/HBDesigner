@@ -3,10 +3,12 @@ import glob
 import os
 import time
 from copy import deepcopy
-from pebble import ProcessExpired, ProcessPool
+from functools import partial
+
 import networkx as nx
 import numpy as np
 import pyrosetta
+from pebble import ProcessExpired, ProcessPool
 from pyrosetta import Pose
 from pyrosetta.rosetta.core.import_pose import pose_from_pdbstring
 from pyrosetta.rosetta.core.select.residue_selector import LayerSelector
@@ -24,11 +26,17 @@ pyrosetta.init(
     + " -ignore_unrecognized_res 1"
 )
 
-MIN_NET, MAX_NET = 2, 6
 
+def detect_asmb(fname: str, max_net_size: int, min_net_size: int) -> bool:
+    """
+    Detect H-Bond networks in a given assembly.
 
-def detect_asmb(fname) -> bool:
-    print(fname)
+    Args:
+        fname (str): Path to assembly .npz file.
+    
+    Returns:
+        bool: True if detection was successful, False otherwise.
+    """
     out_graph = fname.removesuffix(".npz") + ".gml"
     # Overwrite or delete, regardless
     if os.path.exists(out_graph):
@@ -78,7 +86,7 @@ def detect_asmb(fname) -> bool:
         nodes = list(sg.nodes)
         core_nodes = core_bool_mask[np.array(nodes)]
         # Filter by size
-        if (sg_size < MIN_NET) or (sg_size > MAX_NET):
+        if (sg_size < min_net_size) or (sg_size > max_net_size):
             g_new.remove_nodes_from(sg.nodes)
         # Filter by burial - must be >50% core to stay
         elif np.sum(core_nodes) <= len(nodes) // 2:
@@ -102,16 +110,28 @@ def detect_asmb(fname) -> bool:
     return True
 
 
-def main(args):
-    """Preprocess full ProteinMPNN dataset"""
+def main(data_dir: str, chunk: int, chunk_size: int, max_net_size: int, min_net_size: int) -> None:
+    """
+    Run H-Bond network detection on a chunk of preprocessed ProteinMPNN data.
+
+    Args:
+        data_dir (str): Directory containing preprocessed .npz files.
+        chunk (int): Which chunk of data to handle.
+        chunk_size (int): Size to make each chunk.
+        max_net_size (int): Max network size (inclusive).
+        min_net_size (int): Min network size (inclusive).
+
+    Returns:
+        None
+    """
 
     # Grab chunk of sorted asmbs
-    pdbs = sorted(glob.glob(args.data_dir + "/*/*.npz"))
+    pdbs = sorted(glob.glob(data_dir + "/*/*.npz"))
     pdbs = [p for p in pdbs if 'hbnet' not in p]
-    pdbs = [pdbs[i : i + args.chunks] for i in range(0, len(pdbs), args.chunks)]
-    asmbs = pdbs[args.chunk - 1]
+    pdbs = [pdbs[i : i + chunk_size] for i in range(0, len(pdbs), chunk_size)]
+    asmbs = pdbs[chunk - 1]
     print(
-        f"Running network detection on chunk {args.chunk - 1} of {len(pdbs)}: {len(list(asmbs))} pdbs...",
+        f"Running network detection on chunk {chunk - 1} of {len(pdbs)}: {len(list(asmbs))} pdbs...",
         flush=True,
     )
 
@@ -119,7 +139,11 @@ def main(args):
     n_processed = 0
     i = 0
 
-    worker_func = detect_asmb
+    worker_func = partial(
+        detect_asmb, 
+        max_net_size=max_net_size, 
+        min_net_size=min_net_size,
+    )
     # ProcessPool uses a worker timeout argument to avoid hangs
     with ProcessPool(max_workers=1) as p:
         future = p.map(worker_func, asmbs, chunksize=1, timeout=300)
@@ -161,34 +185,38 @@ def main(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser("Preprocess ProteinMPNN dataset for HBDesigner (step 2).")
     parser.add_argument(
         "--data_dir",
         type=str,
         help="Directory containing preprocessed .npz files.",
+        required=True,
     )
     parser.add_argument(
         "--chunk",
         type=int,
         default=1,
         help="Which chunk of data to handle. Defaults to 1.",
+        required=False,
     )
     parser.add_argument(
-        "--chunks", type=int, default=100, help="Size to make each chunk."
+        "--chunk_size", type=int, default=100, help="Size to make each chunk.", 
+        required=False,
     )
     parser.add_argument(
-        "--max",
+        "--max_net_size",
         type=int,
         default=6,
         help="Max network size (inclusive). Defaults to 6.",
+        required=False,
     )
     parser.add_argument(
-        "--min",
+        "--min_net_size",
         type=int,
         default=2,
         help="Min network size (inclusive). Defaults to 2.",
+        required=False,
     )
 
     args = parser.parse_args()
-    print(args)
-    main(args)
+    main(**vars(args))
