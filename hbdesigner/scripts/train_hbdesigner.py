@@ -24,25 +24,15 @@ import hbdesigner.data.residue_constants as rc
 from hbdesigner.data.features import (
     calc_bb_dihedrals,
     impute_CB,
-    calc_sc_dihedrals,
     build_sc_from_chi,
-    sincos_to_angle,
 )
 from hbdesigner.data.hbnet import (
-    batch_to_proteins,
-    pack_with_rosetta,
-    rosetta_hbond_detect,
     get_guide_atom,
     get_seq_cond,
     calc_seq_rec_batched,
-    clear_non_network_res,
     crop_by_distance,
 )
-from hbdesigner.model.pippack_model import (
-    apply_logits_to_proteins,
-    get_sidechain_logits,
-    load_PIPPack,
-)
+
 from hbdesigner.data.protein import PDB_CHAIN_IDS, Protein
 from hbdesigner.scripts.preprocess_asmbs import load_metadata
 from hbdesigner.train.config import TrainConfig
@@ -69,10 +59,17 @@ class HBDesignerDataset(torch.utils.data.IterableDataset):
         # Load metadata
         self.cfg = cfg
         self.split = split
-        self.dir = self.cfg.model.hbdesigner.data_location
-        self.batch_size = self.cfg.model.hbdesigner.batch_size
+
+        if self.cfg.model.model_name == "HBDesigner":
+            self.model_cfg = self.cfg.model.hbdesigner
+        elif self.cfg.model.model_name == "HBPacker":
+            self.model_cfg = self.cfg.model.hbpacker
+        else:
+            raise ValueError(f"Unknown model name: {self.cfg.model.model_name}")
+
+        self.dir = self.model_cfg.data_location
+        self.batch_size = self.model_cfg.batch_size
         self.MAX_LENGTH = self.batch_size
-        self.MAX_BFACTOR = 1000.0  # 40. # for eval purposes only
         df = load_metadata(self.dir, split=split)
 
         # Compile cluster -> chainid mapping
@@ -186,17 +183,17 @@ class HBDesignerDataset(torch.utils.data.IterableDataset):
             sg = g.subgraph(c)
             n_res = len(sg)
             # If wrong size, don't sample
-            if (n_res > self.cfg.model.hbdesigner.max_res) or (
-                n_res < self.cfg.model.hbdesigner.min_res
+            if (n_res > self.model_cfg.max_res) or (
+                n_res < self.model_cfg.min_res
             ):
                 sampling_probs.append(0.0)
             else:
                 nodes = list(sg.nodes(data=True))
                 chains = list(set([n[-1]["PDB_Chain"] for n in nodes]))
 
-                if self.cfg.model.hbdesigner.rescore:
+                if self.model_cfg.rescore:
                     # Only filter if directed
-                    if self.cfg.model.hbdesigner.rescore_filter:
+                    if self.model_cfg.rescore_filter:
                         net_sat = nodes[0][-1]["Network_Sat"]
                         net_buns = nodes[0][-1]["Network_BUNs"]
                         net_buphs = nodes[0][-1]["Network_BUPHs"]
@@ -216,7 +213,7 @@ class HBDesignerDataset(torch.utils.data.IterableDataset):
                     if len(chains) == 1:
                         sampling_probs.append(1.0)
                     else:
-                        sampling_probs.append(self.cfg.model.hbdesigner.inter_weight)
+                        sampling_probs.append(self.model_cfg.inter_weight)
 
         # Check that at least one valid network exists
         if (len(sampling_probs) < 1) or (sum(sampling_probs) <= 0.0):
@@ -284,7 +281,7 @@ class HBDesignerDataset(torch.utils.data.IterableDataset):
             asmb_id = asmb_candidates[self.cfg.seed % len(asmb_candidates)]
         asmb_npz = PREFIX + f"_{asmb_id}.npz"
 
-        if self.cfg.model.hbdesigner.rescore:
+        if self.model_cfg.rescore:
             asmb_gml = PREFIX + f"_{asmb_id}_rescore.gml"
         else:
             asmb_gml = PREFIX + f"_{asmb_id}.gml"
@@ -317,7 +314,7 @@ class HBDesignerDataset(torch.utils.data.IterableDataset):
         asmb_hbnet = asmb_gml.removesuffix(".gml") + "_hbnet.npz"
         if os.path.isfile(asmb_hbnet):
             use_hbnet = np.random.binomial(
-                n=1, p=self.cfg.model.hbdesigner.hbnet_pct, size=1
+                n=1, p=self.model_cfg.hbnet_pct, size=1
             ).astype(bool)[0]
             if use_hbnet:
                 # Grab a random network
@@ -343,15 +340,8 @@ class HBDesignerDataset(torch.utils.data.IterableDataset):
                 p.aatype[hbnet_pos] = hbnet_arr[hbnet_pos]
 
         # If HBNet Pct is 100%, don't use any native nets
-        elif self.cfg.model.hbdesigner.hbnet_pct >= 1.0:
+        elif self.model_cfg.hbnet_pct >= 1.0:
             return
-
-        # If testing packer, filter out high b-factor chains
-        if (self.split == "test") and self.cfg.model.hbdesigner.pack:
-            net_atom_mask = p.atom27_mask[hbnet_pos, :14]
-            net_b_facs = p.b_factors[hbnet_pos, :14][net_atom_mask > 0]
-            if np.max(net_b_facs) > self.MAX_BFACTOR:
-                return None
 
         # Prune chains not included in network
         network_chains = np.unique(p.chain_index[hbnet_pos])
@@ -412,8 +402,6 @@ class HBDesignerDataset(torch.utils.data.IterableDataset):
         aatype_gt = p.aatype
         p.atom27_xyz[~hbnet_mask, 4:] = 0.0
         p.atom27_mask[~hbnet_mask, 4:] = 0
-        atom14_xyz_gt = p.atom27_xyz[:, :14]
-        atom14_mask_gt = p.atom27_mask[:, :14]
         residue_index = p.residue_index
         chain_index = p.chain_index
 
@@ -727,7 +715,6 @@ class HBDesignerDataset(torch.utils.data.IterableDataset):
 class HBDesignerTrainer(SupervisedTrainer):
     def set_default_hps(self, base: TrainConfig) -> None:
         base.model.model_name = "HBDesigner"
-        base.model.hbdesigner.data_location = "/data/pdb_2021aug02"
         base.model.hbdesigner.max_res = 6
         base.model.hbdesigner.min_res = 2
 
@@ -1024,6 +1011,7 @@ class HBDesignerTrainer(SupervisedTrainer):
 
 
 def build_hbdesigner_config_longleaf():
+    
     config: TrainConfig = init_empty(TrainConfig())
     config.log_dir = f"/work/users/d/i/dieckhau/sandbox/HBDesigner/logs/hbdesigner/{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
     config.device = "cuda:0" if torch.cuda.is_available() else "cpu"
@@ -1072,7 +1060,7 @@ CONFIGS = {
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, default="hbdes3_longleaf")
+    parser.add_argument("--config", type=str, default="hbdesigner_longleaf")
     parser.add_argument("--use_wandb", action="store_true")
     parser.add_argument("--resume_id", type=str, default="")
     parser.add_argument("--resume_ckpt", type=str, default=None)

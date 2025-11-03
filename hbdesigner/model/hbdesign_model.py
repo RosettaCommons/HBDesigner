@@ -20,9 +20,9 @@ from hbdesigner.train.config import TrainConfig
 
 class HBDesigner(nn.Module):
     """
-    Updated class for motif design (HBDesigner) using diffusion-like decoding and backbone-only encoding.
-
-    Accepts sequence and guide atom conditioning, as well as total network size.
+    Sequence design model for HBDesigner. 
+    
+    Predicts positions and amino acids for putative network residues given an empty backbone.
 
     """
 
@@ -73,7 +73,7 @@ class HBDesigner(nn.Module):
         # Guide atom conditioning
         self.guide_atom_rbf_linear = nn.Linear(c.num_rbf, c.pg_dim)
         self.guide_atom_rbf_norm = nn.LayerNorm(c.pg_dim)
-        self.guide2res_linears  = nn.ModuleList(
+        self.guide2res_linears = nn.ModuleList(
             [
                 nn.Linear(c.pn_dim + c.pg_dim, c.pn_dim)
                 for _ in range(c.num_protein_encoder_layers)
@@ -82,7 +82,7 @@ class HBDesigner(nn.Module):
 
         # Amino acid type conditioning
         self.seq_dist_linear = nn.Linear(rc.restype_num + 1, c.pn_dim)
-        self.seq2res_linears  = nn.ModuleList(
+        self.seq2res_linears = nn.ModuleList(
             [
                 nn.Linear(c.pn_dim * 2, c.pn_dim)
                 for _ in range(c.num_protein_encoder_layers)
@@ -184,11 +184,13 @@ class HBDesigner(nn.Module):
 
         return edges
 
-    def _form_guide_atom_feats(self, atom14_xyz: torch.Tensor, 
-                               atom14_mask: torch.Tensor, 
-                               guide_atom_xyz: torch.Tensor, 
-                               aatype_batch: torch.Tensor,
-                               ) -> torch.Tensor:
+    def _form_guide_atom_feats(
+        self,
+        atom14_xyz: torch.Tensor,
+        atom14_mask: torch.Tensor,
+        guide_atom_xyz: torch.Tensor,
+        aatype_batch: torch.Tensor,
+    ) -> torch.Tensor:
         """Calculate RBFs between each Cb and the guide atom (node feature)."""
         c = self.cfg.model.hbdesigner
 
@@ -199,20 +201,20 @@ class HBDesigner(nn.Module):
             atom_xyz[..., 0, :], atom_xyz[..., 1, :], atom_xyz[..., 2, :]
         )
         atom_mask[..., 4] = torch.prod(atom_mask[..., :3], dim=-1)
-        cdists = torch.cdist(atom_xyz[..., 4, :], guide_atom_xyz) # [L, B]
+        cdists = torch.cdist(atom_xyz[..., 4, :], guide_atom_xyz)  # [L, B]
         cdists = cdists * atom_mask[..., 4:]
 
         # Mask out cross-sample distances
-        sample_mask = F.one_hot(aatype_batch, cdists.shape[-1]).float() # [L, B]
-        cdists = (cdists * sample_mask).sum(-1)[:, None] # [L, 1]
-        rbf_mu = torch.linspace(0, 20, c.num_rbf) # [N_RBF]
+        sample_mask = F.one_hot(aatype_batch, cdists.shape[-1]).float()  # [L, B]
+        cdists = (cdists * sample_mask).sum(-1)[:, None]  # [L, 1]
+        rbf_mu = torch.linspace(0, 20, c.num_rbf)  # [N_RBF]
         rbf_mu = rbf_mu.to(atom14_xyz.device)
         rbf_sigma = 20 / c.num_rbf
-        rbf = torch.exp(-1 * (cdists - rbf_mu) ** 2 / rbf_sigma**2) # [L, N_RBF]
+        rbf = torch.exp(-1 * (cdists - rbf_mu) ** 2 / rbf_sigma**2)  # [L, N_RBF]
 
         # Featurize and norm
-        nodes = self.guide_atom_rbf_linear(rbf) # [L, pg_dim]
-        nodes = self.guide_atom_rbf_norm(nodes) # [L, pg_dim]
+        nodes = self.guide_atom_rbf_linear(rbf)  # [L, pg_dim]
+        nodes = self.guide_atom_rbf_norm(nodes)  # [L, pg_dim]
         return nodes
 
     def _get_conditioning_info(self, b: gd.Batch) -> Dict[str, torch.Tensor]:
@@ -223,24 +225,35 @@ class HBDesigner(nn.Module):
         # Encode number of network residues remaining
         net_res_num = F.one_hot(b.net_res_num, self.net_res_num_range).float()  # [B, N]
         net_res_num_cond = self.net_res_num_linear(net_res_num)  # [B, pg_dim]
-        cond_info["net_res_num_nodes"] = net_res_num_cond.repeat_interleave(b.batch2res_repeats, dim=0) # [L, pg_dim]
+        cond_info["net_res_num_nodes"] = net_res_num_cond.repeat_interleave(
+            b.batch2res_repeats, dim=0
+        )  # [L, pg_dim]
 
         # Encode and mask guide atom node features
-        guide_atom_nodes = self._form_guide_atom_feats(b.atom14_xyz, b.atom14_mask, b.guide_atom_xyz, b.aatype_batch) # [L, pg_dim]
-        guide_atom_pct = torch.full_like(b.batch2res_repeats, fill_value=c.guide_atom_pct, dtype=torch.float32) # [B]
-        guide_atom_mask = torch.bernoulli(guide_atom_pct) # [B]
-        guide_atom_mask = guide_atom_mask.repeat_interleave(b.batch2res_repeats, dim=0) # [L]
-        cond_info["guide_atom_nodes"] = guide_atom_nodes * guide_atom_mask[:, None] # [L, pg_dim]
+        guide_atom_nodes = self._form_guide_atom_feats(
+            b.atom14_xyz, b.atom14_mask, b.guide_atom_xyz, b.aatype_batch
+        )  # [L, pg_dim]
+        guide_atom_pct = torch.full_like(
+            b.batch2res_repeats, fill_value=c.guide_atom_pct, dtype=torch.float32
+        )  # [B]
+        guide_atom_mask = torch.bernoulli(guide_atom_pct)  # [B]
+        guide_atom_mask = guide_atom_mask.repeat_interleave(
+            b.batch2res_repeats, dim=0
+        )  # [L]
+        cond_info["guide_atom_nodes"] = (
+            guide_atom_nodes * guide_atom_mask[:, None]
+        )  # [L, pg_dim]
 
         # Encode expected network sequence distribution
-        seq_dist_nodes = self.seq_dist_linear(b.aatype_cond) # [B, pn_dim]
-        seq_dist_nodes = seq_dist_nodes.repeat_interleave(b.batch2res_repeats, dim=0) # [L, pn_dim]
+        seq_dist_nodes = self.seq_dist_linear(b.aatype_cond)  # [B, pn_dim]
+        seq_dist_nodes = seq_dist_nodes.repeat_interleave(
+            b.batch2res_repeats, dim=0
+        )  # [L, pn_dim]
         cond_info["seq_dist_nodes"] = seq_dist_nodes
 
         return cond_info
 
     def forward(self, b: gd.Batch) -> Dict[str, torch.Tensor]:
-
         # Create initial embedding of protein nodes
         protein_nodes = self._form_protein_nodes(
             b.bb_dihedral,
@@ -264,7 +277,6 @@ class HBDesigner(nn.Module):
 
         # Pass through MPNN layers
         for i, layer in enumerate(self.mpnn_layers):
-
             # Residue count conditioning
             protein_nodes = protein_nodes + self.cond2res_linears[i](
                 torch.cat(
@@ -277,23 +289,23 @@ class HBDesigner(nn.Module):
             )
             # Guide atom conditioning
             protein_nodes = protein_nodes + self.guide2res_linears[i](
-                            torch.cat(
-                                [
-                                    protein_nodes,
-                                    cond_info["guide_atom_nodes"],
-                                ],
-                                dim=-1,
-                            )
-                        )
+                torch.cat(
+                    [
+                        protein_nodes,
+                        cond_info["guide_atom_nodes"],
+                    ],
+                    dim=-1,
+                )
+            )
             # Sequence conditioning
             protein_nodes = protein_nodes + self.seq2res_linears[i](
-                            torch.cat(
-                                [
-                                    protein_nodes, 
-                                    cond_info["seq_dist_nodes"],
-                                ], 
-                                dim=-1
-                            )
+                torch.cat(
+                    [
+                        protein_nodes,
+                        cond_info["seq_dist_nodes"],
+                    ],
+                    dim=-1,
+                )
             )
 
             # Message passing
@@ -376,7 +388,9 @@ class HBDesigner(nn.Module):
         residue_type_one_hot = F.one_hot(aatype, rc.restype_num + 1).float()  # [L, 20]
 
         # Do label smoothing, if enabled
-        residue_type_one_hot += (self.cfg.model.hbdesigner.nll_smoothing / float(residue_type_one_hot.size(-1)))
+        residue_type_one_hot += self.cfg.model.hbdesigner.nll_smoothing / float(
+            residue_type_one_hot.size(-1)
+        )
         residue_type_one_hot /= residue_type_one_hot.sum(-1, keepdim=True)
 
         seq_log_probs = F.log_softmax(seq_logits, 1)  # [L, 20]
@@ -400,9 +414,11 @@ class HBDesigner(nn.Module):
         return torch.nan_to_num(seq_nll)
 
     @torch.no_grad()
-    def _compute_other_metrics(self, loss_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def _compute_other_metrics(
+        self, loss_dict: Dict[str, torch.Tensor]
+    ) -> Dict[str, torch.Tensor]:
         """Compute training metrics not involved in loss calculation."""
-        
+
         metric_dict = {}
 
         # Perplexity for each pred task
@@ -442,9 +458,7 @@ class HBDesigner(nn.Module):
         loss_dict["net_res_nll"] = torch.mean(loss_dict["net_res_nll_batch"])
 
         if c.net_res_nll_weight > 0:
-            loss += (
-                c.net_res_nll_weight * loss_dict["net_res_nll"]
-            )
+            loss += c.net_res_nll_weight * loss_dict["net_res_nll"]
 
         # Sequence prediction
         loss_dict["seq_nll_batch"] = self.compute_seq_nll(
@@ -506,7 +520,7 @@ class HBDesigner(nn.Module):
         net_res_log_probs = net_res_logits - logsumexp[aatype_batch]  # [L,]
         net_res_probs = torch.exp(net_res_log_probs)
 
-        net_res_probs = net_res_probs[net_res_argmax].squeeze(-1) # [B]
+        net_res_probs = net_res_probs[net_res_argmax].squeeze(-1)  # [B]
         return net_res_argmax, net_res_probs
 
     def sample_seq(
@@ -528,10 +542,15 @@ class HBDesigner(nn.Module):
         seq_argmax = torch.argmax(seq_gumbel, dim=-1)
 
         # Collect pred seq prob
-        res_mask = torch.tensor([0, 1, 1, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 0, 0], dtype=torch.bool).to(seq_logits.device)
+        res_mask = torch.tensor(
+            [0, 1, 1, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 0, 0],
+            dtype=torch.bool,
+        ).to(seq_logits.device)
         seq_logits = seq_logits[:, res_mask]
         seq_log_probs = F.log_softmax(seq_logits, 1)  # [L, 20]
-        residue_type_one_hot = F.one_hot(seq_argmax, rc.restype_num + 1).float()  # [L, 20]
+        residue_type_one_hot = F.one_hot(
+            seq_argmax, rc.restype_num + 1
+        ).float()  # [L, 20]
         residue_type_one_hot = residue_type_one_hot[:, res_mask]
         seq_log_probs = (residue_type_one_hot * seq_log_probs).sum(1)  # [L,]
         seq_probs = torch.exp(seq_log_probs)
@@ -548,8 +567,8 @@ class HBDesigner(nn.Module):
 
         # Clear all seq and sidechain info
         b.aatype[:] = rc.restype_num
-        b.atom14_xyz[:, 4:, :] = 0.
-        b.atom14_mask[:, 4:] = 0.
+        b.atom14_xyz[:, 4:, :] = 0.0
+        b.atom14_mask[:, 4:] = 0.0
 
         # Revert masks back to start of decoding
         net_sizes = (
@@ -561,23 +580,27 @@ class HBDesigner(nn.Module):
         b.net_res_num = net_sizes
 
         # Create initial sequence
-        seq = (rc.restype_num * torch.ones_like(b.aatype)).to(torch.long) # [B]
-        net_res_probs = torch.zeros_like(b.aatype).to(torch.float32) # [B]
-        seq_probs = torch.zeros_like(b.aatype).to(torch.float32) # [B]
+        seq = (rc.restype_num * torch.ones_like(b.aatype)).to(torch.long)  # [B]
+        net_res_probs = torch.zeros_like(b.aatype).to(torch.float32)  # [B]
+        seq_probs = torch.zeros_like(b.aatype).to(torch.float32)  # [B]
 
         # Calculate allowed counts of each aatype based on cond info
-        aatype_cond_counts = (b.aatype_cond * b.net_res_num[:, None]) # [B, 21]
+        aatype_cond_counts = b.aatype_cond * b.net_res_num[:, None]  # [B, 21]
         polars = torch.tensor(rc.restype_hb_idx).to(b.x.device)
         real_counts = torch.zeros_like(aatype_cond_counts)
-        real_counts[aatype_cond_counts >= 1] += aatype_cond_counts[aatype_cond_counts >= 1].round()
-        aatype_cond_counts[aatype_cond_counts >= 1] -= real_counts[aatype_cond_counts >= 1]
+        real_counts[aatype_cond_counts >= 1] += aatype_cond_counts[
+            aatype_cond_counts >= 1
+        ].round()
+        aatype_cond_counts[aatype_cond_counts >= 1] -= real_counts[
+            aatype_cond_counts >= 1
+        ]
         n_unk = torch.sum(aatype_cond_counts, dim=-1)
         aatype_cond_counts = torch.clone(real_counts)
         aatype_cond_counts[:, rc.restype_hb_idx] += n_unk[:, None]
         real_counts[:, -1] += n_unk
         # NOTE: aatype_cond_counts tracks valid aatypes
         # NOTE: real_counts tracks strict/ambiguous restype accounting
-        
+
         # TODO custom ambiguous conditioning test (comment out later)
         # NOTE: this uses the native aatype distribution as conditioning and allows any/all combinations of restypes (no strict conditioning)
         # # Curated dataset fractions
@@ -627,25 +650,25 @@ class HBDesigner(nn.Module):
 
                 # Guide atom conditioning
                 protein_nodes = protein_nodes + self.guide2res_linears[i](
-                                torch.cat(
-                                    [
-                                        protein_nodes,
-                                        cond_info["guide_atom_nodes"],
-                                    ],
-                                    dim=-1,
-                                )
-                            )
+                    torch.cat(
+                        [
+                            protein_nodes,
+                            cond_info["guide_atom_nodes"],
+                        ],
+                        dim=-1,
+                    )
+                )
 
                 # Guide sequence conditioning
                 protein_nodes = protein_nodes + self.seq2res_linears[i](
-                            torch.cat(
-                                [   
-                            protein_nodes, 
+                    torch.cat(
+                        [
+                            protein_nodes,
                             cond_info["seq_dist_nodes"],
-                                ],
-                                dim=-1,
-                            )
-                        )
+                        ],
+                        dim=-1,
+                    )
+                )
 
                 # Message passing
                 protein_nodes, protein_edges = layer(
@@ -658,7 +681,6 @@ class HBDesigner(nn.Module):
         # Make predictions until model predicts each example is done.
         done = [False] * b.num_graphs
         while sum(done) < b.num_graphs:
-            
             # Generate net res condition for current setting
             net_res_num = F.one_hot(
                 b.net_res_num, self.net_res_num_range
@@ -668,7 +690,9 @@ class HBDesigner(nn.Module):
 
             # Get processed node embeddings for current step
             protein_nodes = get_processed_node_embeddings(
-                b, seq, cond_info,
+                b,
+                seq,
+                cond_info,
             )  # [L, pn_dim]
 
             # If graph is already done, don't decode its nodes
@@ -687,7 +711,7 @@ class HBDesigner(nn.Module):
             seq_logits = self.seq_layer(protein_nodes[net_res])
 
             # For any samples w/seq cond, mask out all other logits to ensure correct aatype chosen
-            aatypes_not_allowed = (aatype_cond_counts <= 0.).to(bool)
+            aatypes_not_allowed = (aatype_cond_counts <= 0.0).to(bool)
             seq_logits[aatypes_not_allowed[net_res_mask]] = -torch.inf
 
             seq_pred, seq_p = self.sample_seq(
@@ -711,7 +735,7 @@ class HBDesigner(nn.Module):
                 if net_res_mask[i]:
                     r = seq[net_res][graphs_changed == i].item()
                     # if not a "strict" requirement, remove one UNK token
-                    if real_counts[i, r] < 1.:
+                    if real_counts[i, r] < 1.0:
                         aatype_cond_counts[i, polars] -= 1
                         real_counts[i, -1] -= 1
                     # else, remove just the restype token
@@ -721,9 +745,11 @@ class HBDesigner(nn.Module):
 
             # Update seq dist feature with new conditioning
             b.aatype_cond = aatype_cond_counts / (b.net_res_num[:, None] + 1e-8)
-            b.aatype_cond /= (torch.sum(b.aatype_cond, axis=-1)[:, None] + 1e-8)
-            seq_dist_nodes = self.seq_dist_linear(b.aatype_cond) # [B, pn_dim]
-            seq_dist_nodes = seq_dist_nodes.repeat_interleave(b.batch2res_repeats, dim=0) # [L, pn_dim]
+            b.aatype_cond /= torch.sum(b.aatype_cond, axis=-1)[:, None] + 1e-8
+            seq_dist_nodes = self.seq_dist_linear(b.aatype_cond)  # [B, pn_dim]
+            seq_dist_nodes = seq_dist_nodes.repeat_interleave(
+                b.batch2res_repeats, dim=0
+            )  # [L, pn_dim]
 
             is_stop = b.net_res_num < 1
             # Handle samples that need to stop
@@ -738,7 +764,7 @@ class HBDesigner(nn.Module):
             seq_i = seq[b.aatype_batch == i]
             seq_i_mask = seq_i != rc.restype_num
             results_dict[i] = {
-                "net_res": torch.where(seq_i_mask)[0], 
+                "net_res": torch.where(seq_i_mask)[0],
                 "seq": seq_i[seq_i_mask],
                 "net_res_probs": net_res_probs[b.aatype_batch == i][seq_i_mask],
                 "seq_probs": seq_probs[b.aatype_batch == i][seq_i_mask],
@@ -753,11 +779,10 @@ class HBDesigner(nn.Module):
         seq_sample_temp: float = 0.1,
         bb_noise: float = 0.0,
     ) -> Dict[str, torch.Tensor]:
-
         """
         Currently used by inference_hbdesigner
-        Intended as sample fxn for actual inference operation. 
-        
+        Intended as sample fxn for actual inference operation.
+
         - Does less housekeeping than original sample fxn.
         - Assumes batch is already configured (seq empty, network sizes set, etc)."""
 
@@ -769,15 +794,18 @@ class HBDesigner(nn.Module):
         seq = b.aatype_masked
 
         # For confidence prediction
-        net_res_probs = torch.zeros_like(b.aatype).to(torch.float32) # [B]
-        seq_probs = torch.zeros_like(b.aatype).to(torch.float32) # [B]
-
+        net_res_probs = torch.zeros_like(b.aatype).to(torch.float32)  # [B]
+        seq_probs = torch.zeros_like(b.aatype).to(torch.float32)  # [B]
 
         # Collect aatype cond counts for record keeping
-        aatype_cond_counts = (b.aatype_cond * b.net_res_num[:, None]) # [B, 21]
+        aatype_cond_counts = b.aatype_cond * b.net_res_num[:, None]  # [B, 21]
         real_counts = torch.zeros_like(aatype_cond_counts)
-        real_counts[aatype_cond_counts >= 1] += aatype_cond_counts[aatype_cond_counts >= 1].round()
-        aatype_cond_counts[aatype_cond_counts >= 1] -= real_counts[aatype_cond_counts >= 1]
+        real_counts[aatype_cond_counts >= 1] += aatype_cond_counts[
+            aatype_cond_counts >= 1
+        ].round()
+        aatype_cond_counts[aatype_cond_counts >= 1] -= real_counts[
+            aatype_cond_counts >= 1
+        ]
         n_unk = torch.sum(aatype_cond_counts, dim=-1)
         aatype_cond_counts = torch.clone(real_counts)
         aatype_cond_counts[:, rc.restype_hb_idx] += n_unk[:, None]
@@ -821,25 +849,25 @@ class HBDesigner(nn.Module):
 
                 # Guide atom conditioning
                 protein_nodes = protein_nodes + self.guide2res_linears[i](
-                                torch.cat(
-                                    [
-                                        protein_nodes,
-                                        cond_info["guide_atom_nodes"],
-                                    ],
-                                    dim=-1,
-                                )
-                            )
+                    torch.cat(
+                        [
+                            protein_nodes,
+                            cond_info["guide_atom_nodes"],
+                        ],
+                        dim=-1,
+                    )
+                )
 
                 # Guide sequence conditioning
                 protein_nodes = protein_nodes + self.seq2res_linears[i](
-                            torch.cat(
-                                [   
-                            protein_nodes, 
+                    torch.cat(
+                        [
+                            protein_nodes,
                             cond_info["seq_dist_nodes"],
-                                ],
-                                dim=-1,
-                            )
-                        )
+                        ],
+                        dim=-1,
+                    )
+                )
 
                 # Message passing
                 protein_nodes, protein_edges = layer(
@@ -852,7 +880,6 @@ class HBDesigner(nn.Module):
         # Make predictions until model predicts each example is done.
         done = [False] * b.num_graphs
         while sum(done) < b.num_graphs:
-            
             # Generate net res condition for current setting
             net_res_num = F.one_hot(
                 b.net_res_num, self.net_res_num_range
@@ -862,11 +889,13 @@ class HBDesigner(nn.Module):
 
             # Get processed node embeddings for current step
             protein_nodes = get_processed_node_embeddings(
-                b, seq, cond_info,
+                b,
+                seq,
+                cond_info,
             )  # [L, pn_dim]
 
             # If graph is already done, don't decode its nodes
-            net_res_mask = (b.net_res_num > 0)
+            net_res_mask = b.net_res_num > 0
 
             # Make res prediction
             net_res_logits = self.net_res_layer(protein_nodes)
@@ -875,7 +904,10 @@ class HBDesigner(nn.Module):
 
             # Sample positions
             net_res, net_res_p = self.sample_res(
-                net_res_logits, b.aatype_batch, b.done_mask, res_sample_temp,
+                net_res_logits,
+                b.aatype_batch,
+                b.done_mask,
+                res_sample_temp,
             )
             net_res = net_res.squeeze(-1)
             net_res = net_res[net_res_mask]
@@ -899,7 +931,7 @@ class HBDesigner(nn.Module):
             seq_probs[net_res] = seq_p
 
             # One less res to predict
-            b.net_res_num -= 1 # only 1 if asymmtric
+            b.net_res_num -= 1  # only 1 if asymmtric
             b.net_res_num = torch.clamp(b.net_res_num, min=0)
 
             # Update res-to-predict vector for each graph
@@ -910,7 +942,7 @@ class HBDesigner(nn.Module):
                     r_all = seq[net_res][graphs_changed == i]
                     for r in r_all:
                         # Check if ambiguous or strict residue
-                        if real_counts[i, r] < 1.:
+                        if real_counts[i, r] < 1.0:
                             aatype_cond_counts[i, rc.restype_hb_idx] -= 1
                             real_counts[i, -1] -= 1
                         else:
@@ -920,8 +952,10 @@ class HBDesigner(nn.Module):
             # Update seq dist feature with new conditioning
             b.aatype_cond = aatype_cond_counts / (b.net_res_num[:, None] + 1e-8)
 
-            seq_dist_nodes = self.seq_dist_linear(b.aatype_cond) # [B, pn_dim]
-            seq_dist_nodes = seq_dist_nodes.repeat_interleave(b.batch2res_repeats, dim=0) # [L, pn_dim]
+            seq_dist_nodes = self.seq_dist_linear(b.aatype_cond)  # [B, pn_dim]
+            seq_dist_nodes = seq_dist_nodes.repeat_interleave(
+                b.batch2res_repeats, dim=0
+            )  # [L, pn_dim]
 
             is_stop = b.net_res_num < 1
             # Handle samples that need to stop
@@ -935,28 +969,26 @@ class HBDesigner(nn.Module):
             seq_i = seq[b.aatype_batch == i]
             seq_i_mask = seq_i != rc.restype_num
             results_dict[i] = {
-                    "net_res": torch.where(seq_i_mask)[0], 
-                    "seq": seq_i[seq_i_mask], 
-                    "net_res_probs": net_res_probs[b.aatype_batch == i][seq_i_mask],
-                    "seq_probs": seq_probs[b.aatype_batch == i][seq_i_mask],
-                    }
+                "net_res": torch.where(seq_i_mask)[0],
+                "seq": seq_i[seq_i_mask],
+                "net_res_probs": net_res_probs[b.aatype_batch == i][seq_i_mask],
+                "seq_probs": seq_probs[b.aatype_batch == i][seq_i_mask],
+            }
 
         return results_dict
 
 
 def load_HBDesigner(
-    cfg: TrainConfig, 
-    ckpt: str, 
+    cfg: TrainConfig,
+    ckpt: str,
     device: str = "cuda",
 ) -> HBDesigner:
-
     # Load pre-trained weights
     ckpt = torch.load(ckpt, map_location="cpu")
 
-    hbdesigner = HBDesigner(cfg)
+    model = HBDesigner(cfg)
+    model.load_state_dict(ckpt["model_state_dict"])
+    model.eval()
+    model.to(device)
 
-    hbdesigner.load_state_dict(ckpt["model_state_dict"])
-    hbdesigner.eval()
-    hbdesigner.to(device)
-
-    return hbdesigner
+    return model

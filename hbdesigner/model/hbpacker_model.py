@@ -1,25 +1,25 @@
 from typing import Dict, Tuple
+
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch_geometric.data as gd
 import torch_geometric.nn as gnn
-from torch_scatter import scatter, scatter_max
-import numpy as np
+from torch_scatter import scatter
 
 import hbdesigner.data.residue_constants as rc
+import hbdesigner.data.rigid_utils as ru
 from hbdesigner.data.features import (
-    impute_CB, 
-    scatter_masked_mean, 
-    sincos_to_angle, 
-    get_renamed_coords, 
-    normalize_chi, 
+    get_renamed_coords,
+    impute_CB,
     masked_mean,
+    normalize_chi,
+    sincos_to_angle,
 )
 from hbdesigner.model.layers import (
     MPNNLayer,
 )
-import hbdesigner.data.rigid_utils as ru
 from hbdesigner.train.config import TrainConfig
 
 
@@ -34,7 +34,7 @@ class HBPacker(nn.Module):
     def __init__(self, cfg: TrainConfig) -> None:
         super().__init__()
         self.cfg = cfg
-        c = cfg.model.hbdesigner
+        c = cfg.model.hbpacker
         self.max_comps = c.max_res
         self.knn_k = c.knn_k
         self.n_atoms = 14
@@ -66,10 +66,9 @@ class HBPacker(nn.Module):
             ]
         )
 
-
         # Output layers
         self.sc_linear = nn.Linear(c.pn_dim * 2, 8)
-        
+
         # Components for building sidechains
         self._restype_rigid_group_default_frame = None
         self._restype_atom14_to_rigid_group = None
@@ -158,7 +157,7 @@ class HBPacker(nn.Module):
         sc_dihedral: torch.Tensor,
     ) -> torch.Tensor:
         """Forms initial nodes for protein"""
-        c = self.cfg.model.hbdesigner
+        c = self.cfg.model.hbpacker
 
         # Initialize nodes
         nodes = bb_dihedral.new_zeros((bb_dihedral.shape[0], c.pn_dim))
@@ -190,7 +189,7 @@ class HBPacker(nn.Module):
         edge_index: torch.Tensor,
     ) -> torch.Tensor:
         """Forms initial edges for protein"""
-        c = self.cfg.model.hbdesigner
+        c = self.cfg.model.hbpacker
 
         # Initialize edges
         edges = atom14_xyz.new_zeros((edge_index.shape[1], c.pe_dim))
@@ -326,13 +325,10 @@ class HBPacker(nn.Module):
         return xyz, atom_mask
 
     def forward(self, b: gd.Batch) -> Dict[str, torch.Tensor]:
-
-        c = self.cfg.model.hbdesigner
+        c = self.cfg.model.hbpacker
         if self.training and (c.num_recycles > 0):
             # Recycles are random during training
-            n_cycles = torch.randint(
-                0, c.num_recycles, (1,)
-            ).item()
+            n_cycles = torch.randint(0, c.num_recycles, (1,)).item()
         else:
             n_cycles = c.num_recycles
 
@@ -342,7 +338,7 @@ class HBPacker(nn.Module):
                 results_dict = self._forward(b)
 
                 # Update the batch values
-                chi_mask = b.chi_nll_mask > 0
+                chi_mask = b.chi_mask.bool()
                 b.atom14_xyz[chi_mask] = results_dict["pred_atom14_xyz"]
                 b.sc_dihedral[chi_mask] = sincos_to_angle(
                     results_dict["pred_chis_norm"]
@@ -354,7 +350,6 @@ class HBPacker(nn.Module):
         return results_dict
 
     def _forward(self, b: gd.Batch) -> Dict[str, torch.Tensor]:
-
         # Create initial embedding of protein nodes
         protein_nodes = self._form_protein_nodes(
             b.bb_dihedral,
@@ -376,29 +371,30 @@ class HBPacker(nn.Module):
 
         # Pass through MPNN layers
         for i, layer in enumerate(self.mpnn_layers):
-
             protein_nodes, protein_edges = layer(
                 protein_nodes, protein_edges, protein_edge_index
             )
 
         # Make chi predictions with ground truth seq context
-        seq_embed = self.seq_embedder(b.aatype_gt)
+        seq_embed = self.seq_embedder(b.aatype)
 
         protein_nodes_seq = torch.cat([protein_nodes, seq_embed], 1)
-        chi_preds_unnorm = self.sc_linear(protein_nodes_seq).view(-1, 4, 2) # [L, 4, 2]
+        chi_preds_unnorm = self.sc_linear(protein_nodes_seq).view(-1, 4, 2)  # [L, 4, 2]
         chi_preds_norm = normalize_chi(chi_preds_unnorm)
 
         # Build sidechain coords now
-        mask = b.chi_nll_mask.bool()
-        aatype = b.aatype_gt[mask]
+        mask = b.chi_mask.bool()
+        aatype = b.aatype[mask]
         bb_xyz = b.atom14_xyz[mask, :4]
         chi_angles_sincos = chi_preds_norm[mask]
-        atom14_xyz, atom14_mask = self.get_atom14_xyz_from_chi(aatype, bb_xyz, chi_angles_sincos)
+        atom14_xyz, atom14_mask = self.get_atom14_xyz_from_chi(
+            aatype, bb_xyz, chi_angles_sincos
+        )
         results_dict = {
-        "pred_chis_unnorm": chi_preds_unnorm,
-        "pred_chis_norm": chi_preds_norm,
-        "pred_atom14_xyz": atom14_xyz,
-        "pred_atom14_mask": atom14_mask,
+            "pred_chis_unnorm": chi_preds_unnorm,
+            "pred_chis_norm": chi_preds_norm,
+            "pred_atom14_xyz": atom14_xyz,
+            "pred_atom14_mask": atom14_mask,
         }
 
         return results_dict
@@ -492,12 +488,14 @@ class HBPacker(nn.Module):
         sq_chi_error = torch.minimum(sq_chi_error, sq_chi_error_shifted)  # [Nres, 4]
 
         # Reweight MSE loss by chi abundance
-        if self.cfg.model.hbdesigner.reweight_chi_mse:
-            chi_count = torch.sum(chi_mask, dim=0) + 1 # [4]
-            chi_count = 1. / (chi_count / (1e-10 + chi_count.sum()))
-            chi_count = 6. * (chi_count / (1e-10 + chi_count.sum())) # Rescale to ~4 (native chi mask)
-            sq_chi_error = (sq_chi_error * chi_count[None, :])
-            sq_chi_error = torch.clamp(sq_chi_error, min=0., max=100.)
+        if self.cfg.model.hbpacker.reweight_chi_mse:
+            chi_count = torch.sum(chi_mask, dim=0) + 1  # [4]
+            chi_count = 1.0 / (chi_count / (1e-10 + chi_count.sum()))
+            chi_count = 6.0 * (
+                chi_count / (1e-10 + chi_count.sum())
+            )  # Rescale to ~4 (native chi mask)
+            sq_chi_error = sq_chi_error * chi_count[None, :]
+            sq_chi_error = torch.clamp(sq_chi_error, min=0.0, max=100.0)
 
         # Chi MSE loss
         sq_chi_loss = masked_mean(sq_chi_error, chi_mask, -1)
@@ -543,14 +541,14 @@ class HBPacker(nn.Module):
         return msd
 
     def compute_sc_clash_loss(
-            self, 
-            atom14_pred_positions: torch.Tensor,
-            atom14_mask: torch.Tensor,
-            aatype: torch.Tensor, 
-            aatype_batch: torch.Tensor,
-            chi_mask: torch.Tensor,
-            clash_overlap_tolerance: float = 1.5, # OpenFold value is 1.5
-            distance_threshold: float = 14., 
+        self,
+        atom14_pred_positions: torch.Tensor,
+        atom14_mask: torch.Tensor,
+        aatype: torch.Tensor,
+        aatype_batch: torch.Tensor,
+        chi_mask: torch.Tensor,
+        clash_overlap_tolerance: float = 1.5,  # OpenFold value is 1.5
+        distance_threshold: float = 14.0,
     ) -> torch.Tensor:
         """Uses VdW  radii to find clashes b/w heavy atoms.
         Note: ignores intra-residue clashes and backbone-backbone clashes."""
@@ -564,25 +562,17 @@ class HBPacker(nn.Module):
             )
         restype_atom14_to_atom37.append([0] * 14)
         restype_atom14_to_atom37 = torch.tensor(
-            restype_atom14_to_atom37, 
-            dtype=torch.long, 
-            device=aatype.device
+            restype_atom14_to_atom37, dtype=torch.long, device=aatype.device
         )
         residx_atom14_to_atom37 = restype_atom14_to_atom37[aatype]
 
         # Compute the Van der Waals radius for every atom
         # (the first letter of the atom name is the element type).
         # Shape: (*, N, 14).
-        atomtype_radius = [
-            rc.van_der_waals_radius[name[0]]
-            for name in rc.atom_types
-        ]
+        atomtype_radius = [rc.van_der_waals_radius[name[0]] for name in rc.atom_types]
         atomtype_radius = atom14_pred_positions.new_tensor(atomtype_radius)
-        atom14_atom_radius = (
-            atom14_mask
-            * atomtype_radius[residx_atom14_to_atom37]
-        )
-        
+        atom14_atom_radius = atom14_mask * atomtype_radius[residx_atom14_to_atom37]
+
         # Get the basis atom xyz for each residue.
         # shape (*, N, 3)
         eps = 1e-10
@@ -590,7 +580,11 @@ class HBPacker(nn.Module):
         basis_atom_idx = 4 * torch.ones_like(aatype)
         basis_atom_idx[aatype == rc.restype_order["G"]] = 1
 
-        basis_xyz = torch.gather(atom14_pred_positions, -2, basis_atom_idx[..., None, None].expand(*atom14_pred_positions.shape))[:, 0, :]
+        basis_xyz = torch.gather(
+            atom14_pred_positions,
+            -2,
+            basis_atom_idx[..., None, None].expand(*atom14_pred_positions.shape),
+        )[:, 0, :]
 
         # Determine distances based on basis atoms.
         # shape (*, N, N)
@@ -604,9 +598,7 @@ class HBPacker(nn.Module):
         # Create the mask for valid residue pairs.
         # shape (*, N, N)
         fp_type = atom14_pred_positions.dtype
-        dists_mask = (
-            aatype_batch[:, None] == aatype_batch[None, :]
-        ).type(fp_type)
+        dists_mask = (aatype_batch[:, None] == aatype_batch[None, :]).type(fp_type)
 
         # Mask out all the duplicate entries in the lower triangular matrix.
         # Also mask out the diagonal (same residue pairs)
@@ -631,8 +623,8 @@ class HBPacker(nn.Module):
         dists = torch.sqrt(
             eps
             + torch.sum(
-                (res1_atom14_xyz[..., None, :] - res2_atom14_xyz[..., None, :, :]) ** 2, 
-                dim=-1
+                (res1_atom14_xyz[..., None, :] - res2_atom14_xyz[..., None, :, :]) ** 2,
+                dim=-1,
             )
         )
 
@@ -643,7 +635,7 @@ class HBPacker(nn.Module):
         # Backbone-backbone clashes are ignored. CB is included in the backbone.
         bb_bb_mask = torch.zeros_like(dists_mask)
         bb_bb_mask[..., :5, :5] = 1.0
-        dists_mask = dists_mask * (1.0 - bb_bb_mask)    
+        dists_mask = dists_mask * (1.0 - bb_bb_mask)
 
         # Compute the lower bound for the allowed distances.
         # shape (N_pairs, 14, 14)
@@ -661,35 +653,34 @@ class HBPacker(nn.Module):
         # Collect into per-sample loss
         dists_to_low_error = torch.sum(dists_to_low_error, dim=(-1, -2))
         clash_loss_batch = scatter(
-            dists_to_low_error, 
-            index=aatype_batch[valid_pairs[0]], 
-            dim=0, 
-            reduce="sum"
+            dists_to_low_error, index=aatype_batch[valid_pairs[0]], dim=0, reduce="sum"
         )
 
         return clash_loss_batch
 
     def compute_sc_orient_loss(
-            self, 
-            pred_xyz: torch.Tensor,
-            true_xyz: torch.Tensor,
-            atom_mask: torch.Tensor,
-            aatype_batch: torch.Tensor,
-            aatype: torch.Tensor,
-        ) -> torch.Tensor:
+        self,
+        pred_xyz: torch.Tensor,
+        true_xyz: torch.Tensor,
+        atom_mask: torch.Tensor,
+        aatype_batch: torch.Tensor,
+        aatype: torch.Tensor,
+    ) -> torch.Tensor:
         """Calculates sc relative orientation loss using relative distances b/w the sidechains atoms in each network."""
 
         eps = 1e-10
-        atom_mask[:, :5] = 0. # no backbone
+        atom_mask[:, :5] = 0.0  # no backbone
 
         # Start mask w/res in the same sample
-        pair_mask = (aatype_batch[:, None] == aatype_batch[None, :]).to(torch.float32) # [N, N]
+        pair_mask = (aatype_batch[:, None] == aatype_batch[None, :]).to(
+            torch.float32
+        )  # [N, N]
 
         # Drop upper diagonal and self-interactions
-        pair_mask = pair_mask * torch.triu(pair_mask, diagonal=1) # [N, N]
+        pair_mask = pair_mask * torch.triu(pair_mask, diagonal=1)  # [N, N]
 
         # Collect tuple of residue pairs
-        valid_pairs = torch.where(pair_mask) # [N, N]
+        valid_pairs = torch.where(pair_mask)  # [N, N]
 
         # Get the atom14 coordinates for the valid residue pairs.
         # shape (N_pairs, 14, 3)
@@ -698,23 +689,34 @@ class HBPacker(nn.Module):
         pred_dists = torch.sqrt(
             eps
             + torch.sum(
-                (res1_atom14_xyz_pred[..., None, :] - res2_atom14_xyz_pred[..., None, :, :]) ** 2, 
-                dim=-1
+                (
+                    res1_atom14_xyz_pred[..., None, :]
+                    - res2_atom14_xyz_pred[..., None, :, :]
+                )
+                ** 2,
+                dim=-1,
             )
-        ) # [N, 14, 14]
+        )  # [N, 14, 14]
 
         res1_atom14_xyz_true = true_xyz[valid_pairs[0]]
         res2_atom14_xyz_true = true_xyz[valid_pairs[1]]
         true_dists = torch.sqrt(
             eps
             + torch.sum(
-                (res1_atom14_xyz_true[..., None, :] - res2_atom14_xyz_true[..., None, :, :]) ** 2, 
-                dim=-1
+                (
+                    res1_atom14_xyz_true[..., None, :]
+                    - res2_atom14_xyz_true[..., None, :, :]
+                )
+                ** 2,
+                dim=-1,
             )
-        ) # [N, 14, 14]
+        )  # [N, 14, 14]
 
-        dist_atom_mask = atom_mask[valid_pairs[0]][:, :, None] * atom_mask[valid_pairs[1]][:, None, :] # [N, 14, 14]
-        orig_dev = (((pred_dists - true_dists) * dist_atom_mask) ** 2) # [N, 14, 14]
+        dist_atom_mask = (
+            atom_mask[valid_pairs[0]][:, :, None]
+            * atom_mask[valid_pairs[1]][:, None, :]
+        )  # [N, 14, 14]
+        orig_dev = ((pred_dists - true_dists) * dist_atom_mask) ** 2  # [N, 14, 14]
 
         true_renamed_xyz = get_renamed_coords(true_xyz, aatype)
         res1_atom14_xyz_true_renamed = true_renamed_xyz[valid_pairs[0]]
@@ -722,41 +724,48 @@ class HBPacker(nn.Module):
         true_dists_renamed = torch.sqrt(
             eps
             + torch.sum(
-                (res1_atom14_xyz_true_renamed[..., None, :] - res2_atom14_xyz_true_renamed[..., None, :, :]) ** 2, 
-                dim=-1
+                (
+                    res1_atom14_xyz_true_renamed[..., None, :]
+                    - res2_atom14_xyz_true_renamed[..., None, :, :]
+                )
+                ** 2,
+                dim=-1,
             )
-        ) # [N, 14, 14]
+        )  # [N, 14, 14]
         # Get square deviation
-        renamed_dev = (((pred_dists - true_dists_renamed) * dist_atom_mask) ** 2) # [N, 14, 14]
-        min_dev = torch.min(orig_dev, renamed_dev) # [N, 14, 14]
+        renamed_dev = (
+            (pred_dists - true_dists_renamed) * dist_atom_mask
+        ) ** 2  # [N, 14, 14]
+        min_dev = torch.min(orig_dev, renamed_dev)  # [N, 14, 14]
 
         # Take masked atom-wise mean of each residue pair
-        orient_error = masked_mean(min_dev, mask=dist_atom_mask, dim=(-1, -2)) # [N]
+        orient_error = masked_mean(min_dev, mask=dist_atom_mask, dim=(-1, -2))  # [N]
         orient_loss_batch = scatter(
-            orient_error, 
-            index=aatype_batch[valid_pairs[0]], 
-            dim=0, 
-            reduce="mean"
+            orient_error, index=aatype_batch[valid_pairs[0]], dim=0, reduce="mean"
         )
         return orient_loss_batch
 
     @torch.no_grad()
-    def _compute_other_metrics(self, b: gd.Batch, results_dict: Dict[str, torch.Tensor], loss_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+    def _compute_other_metrics(
+        self,
+        b: gd.Batch,
+        results_dict: Dict[str, torch.Tensor],
+        loss_dict: Dict[str, torch.Tensor],
+    ) -> Dict[str, torch.Tensor]:
         """Compute training metrics not involved in loss calculation."""
-        
-        metric_dict = {}
 
-        mask = b.chi_nll_mask.bool()
+        metric_dict = {}
+        mask = b.chi_mask.bool()
 
         # Convert sin/cos angles to radian angles
         pred_chi_rad = sincos_to_angle(results_dict["pred_chis_norm"][mask])
         true_chi_rad = sincos_to_angle(b.chi_sincos_gt[mask])
 
         # Chi angle absolute error
-        chi_mask = self.chi_angles_mask[b.aatype_gt[mask]]
+        chi_mask = self.chi_angles_mask[b.aatype[mask]]
         chi_ae = self.compute_chi_ae(
             pred_chi_rad=pred_chi_rad,
-            aatype=b.aatype_gt[mask],
+            aatype=b.aatype[mask],
             chi_mask=chi_mask,
             true_chi_rad=true_chi_rad,
         )  # [L, 4]
@@ -785,26 +794,26 @@ class HBPacker(nn.Module):
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         # Obtain predictions
         results_dict = self(b)
-        c = self.cfg.model.hbdesigner
+        c = self.cfg.model.hbpacker
 
         # Compute various losses.
         loss = 0.0
         loss_dict = {}
 
         # Chi loss terms
-        mask = b.chi_nll_mask.bool()
+        mask = b.chi_mask.bool()
         eps = 1e-6
 
         # Angle (sin/cos) MSE with norm penalty
         loss_dict["chi_mse_batch"] = self.compute_chi_mse(
-                    results_dict["pred_chis_norm"][mask],
-                    results_dict["pred_chis_unnorm"][mask],
-                    b.aatype_gt[mask],
-                    self.chi_angles_mask[b.aatype_gt[mask]],
-                    b.chi_sincos_gt[mask],
-                    eps,
-                    c.chi_norm_weight,
-                )
+            results_dict["pred_chis_norm"][mask],
+            results_dict["pred_chis_unnorm"][mask],
+            b.aatype[mask],
+            self.chi_angles_mask[b.aatype[mask]],
+            b.chi_sincos_gt[mask],
+            eps,
+            c.chi_norm_weight,
+        )
         loss_dict["chi_mse"] = torch.mean(loss_dict["chi_mse_batch"])
 
         if c.chi_mse_weight > 0:
@@ -812,11 +821,11 @@ class HBPacker(nn.Module):
 
         # Sidechain atomic MSD loss
         loss_dict["sc_msd_batch"] = self.compute_sc_msd(
-                    results_dict["pred_atom14_xyz"], 
-                    b.atom14_xyz_gt[mask], 
-                    b.atom14_mask_gt[mask], 
-                    b.aatype_gt[mask]
-                )
+            results_dict["pred_atom14_xyz"],
+            b.atom14_xyz_gt[mask],
+            b.atom14_mask_gt[mask],
+            b.aatype[mask],
+        )
         loss_dict["sc_msd"] = torch.mean(loss_dict["sc_msd_batch"])
 
         if c.sc_msd_weight > 0:
@@ -826,23 +835,23 @@ class HBPacker(nn.Module):
         pred_xyz = b.atom14_xyz.clone()
         pred_xyz[mask] = results_dict["pred_atom14_xyz"]
         loss_dict["clash_loss_batch"] = self.compute_sc_clash_loss(
-            pred_xyz, 
-            b.atom14_mask_gt, 
-            b.aatype_gt, 
+            pred_xyz,
+            b.atom14_mask_gt,
+            b.aatype,
             b.aatype_batch,
-            b.chi_nll_mask,
-            clash_overlap_tolerance=0.6, 
-            distance_threshold=14.,
-            )
+            b.chi_mask,
+            clash_overlap_tolerance=0.6,
+            distance_threshold=14.0,
+        )
         loss_dict["clash_loss"] = torch.mean(loss_dict["clash_loss_batch"])
         if c.sc_clash_weight > 0:
             loss += c.sc_clash_weight * loss_dict["clash_loss"]
 
         # Sidechain atomic orientation loss
         loss_dict["orient_loss_batch"] = self.compute_sc_orient_loss(
-            results_dict["pred_atom14_xyz"], 
-            b.atom14_xyz_gt[mask], 
-            b.atom14_mask_gt[mask], 
+            results_dict["pred_atom14_xyz"],
+            b.atom14_xyz_gt[mask],
+            b.atom14_mask_gt[mask],
             b.aatype_batch[mask],
             b.aatype[mask],
         )
@@ -855,10 +864,11 @@ class HBPacker(nn.Module):
         return loss, loss_dict
 
     @torch.no_grad()
-    def run_pack_recyc(self, 
-        b: gd.Batch, 
+    def run_pack_recyc(
+        self,
+        b: gd.Batch,
         n_recycles: int = 0,
-        ) -> Dict[str, torch.Tensor]:
+    ) -> Dict[str, torch.Tensor]:
         """Currently used by Trainer.pack_batch in hbdes3 mode"""
 
         # NOTE: do I need to zero these out?
@@ -866,12 +876,12 @@ class HBPacker(nn.Module):
         b.net_res_num[:] = 0
         seq = b.aatype
 
-        b.atom14_xyz[:, 4:] = 0.
-        b.atom14_mask[:, 4:] = 0.
+        b.atom14_xyz[:, 4:] = 0.0
+        b.atom14_mask[:, 4:] = 0.0
 
         # Zero out sc dihedral
-        b.sc_dihedral[:] = 0.
-        
+        b.sc_dihedral[:] = 0.0
+
         bb_xyz = b.atom14_xyz[:, :4]
         chi_angles_sincos = torch.stack(
             [torch.sin(b.sc_dihedral), torch.cos(b.sc_dihedral)], dim=-1
@@ -913,42 +923,68 @@ class HBPacker(nn.Module):
 
         # Make predictions until model predicts each example is done.
         for n_r in range(n_recycles + 1):
-        
             protein_nodes = get_processed_node_embeddings(
-                b, seq,
+                b,
+                seq,
             )  # [L, pn_dim]
 
             chi_res_to_pred_i = b.chi_nll_mask.bool()
 
             # Get chi predictions
             seq_embed = self.seq_embedder(seq[chi_res_to_pred_i])
-            protein_nodes_seq = torch.cat([protein_nodes[chi_res_to_pred_i], seq_embed], 1)
+            protein_nodes_seq = torch.cat(
+                [protein_nodes[chi_res_to_pred_i], seq_embed], 1
+            )
 
-            chi_preds_unnorm = self.sc_linear(protein_nodes_seq).view(-1, 4, 2) # [L, 4, 2]
+            chi_preds_unnorm = self.sc_linear(protein_nodes_seq).view(
+                -1, 4, 2
+            )  # [L, 4, 2]
             chi_preds_norm = normalize_chi(chi_preds_unnorm)
 
             # Build sidechain coords now
             aatype = b.aatype[chi_res_to_pred_i]
             bb_xyz = b.atom14_xyz[chi_res_to_pred_i, :4]
             chi_angles_sincos = chi_preds_norm
-            sc_xyz, sc_mask = self.get_atom14_xyz_from_chi(aatype, bb_xyz, chi_angles_sincos)
+            sc_xyz, sc_mask = self.get_atom14_xyz_from_chi(
+                aatype, bb_xyz, chi_angles_sincos
+            )
 
             # Update xyz and dihedrals
             b.atom14_xyz[chi_res_to_pred_i] = sc_xyz
             b.atom14_mask[chi_res_to_pred_i] = sc_mask
-            b.sc_dihedral[chi_res_to_pred_i] = sincos_to_angle(chi_angles_sincos) * self.chi_angles_mask[aatype]
+            b.sc_dihedral[chi_res_to_pred_i] = (
+                sincos_to_angle(chi_angles_sincos) * self.chi_angles_mask[aatype]
+            )
 
         # Create the results dictionary
         results_dict = {}
         for i in range(b.num_graphs):
             seq_i = seq[b.aatype_batch == i]
             seq_i_mask = seq_i != rc.restype_num
-            results_dict[i] = {"net_res": torch.where(seq_i_mask)[0], "seq": seq_i[seq_i_mask]}
+            results_dict[i] = {
+                "net_res": torch.where(seq_i_mask)[0],
+                "seq": seq_i[seq_i_mask],
+            }
 
         b.aatype = seq
-        b.atom14_xyz[(1 - b.chi_nll_mask).bool(), 4:] = 0.
-        b.atom14_mask[(1 - b.chi_nll_mask).bool(), 4:] = 0.
+        b.atom14_xyz[(1 - b.chi_nll_mask).bool(), 4:] = 0.0
+        b.atom14_mask[(1 - b.chi_nll_mask).bool(), 4:] = 0.0
         b.done_mask = b.chi_nll_mask
 
         return b, results_dict
 
+
+def load_HBPacker(
+    cfg: TrainConfig,
+    ckpt: str,
+    device: str = "cuda",
+) -> HBPacker:
+    # Load pre-trained weights
+    ckpt = torch.load(ckpt, map_location="cpu")
+
+    model = HBPacker(cfg)
+    model.load_state_dict(ckpt["model_state_dict"])
+    model.eval()
+    model.to(device)
+
+    return model

@@ -1,10 +1,8 @@
 import argparse
-import datetime
-import itertools
 import os
-import random
 from copy import deepcopy
-from typing import Any, Dict, Optional, Sequence, Tuple, Union
+import datetime
+from typing import Any, Dict, Optional, Sequence, Tuple
 import time
 import pandas as pd
 import networkx as nx
@@ -16,9 +14,6 @@ import wandb
 from omegaconf import OmegaConf
 from scipy.spatial.distance import cdist
 
-from pyrosetta.rosetta.core.import_pose import pose_from_pdbstring
-from pyrosetta.rosetta.core.select.util import calc_sc_neighbors
-from pyrosetta import Pose
 
 import hbdesigner.data.residue_constants as rc
 from hbdesigner.data.features import (
@@ -32,8 +27,6 @@ from hbdesigner.data.hbnet import (
     batch_to_proteins,
     pack_with_rosetta,
     rosetta_hbond_detect,
-    get_guide_atom,
-    get_seq_cond,
     calc_seq_rec_batched,
     clear_non_network_res,
     crop_by_distance,
@@ -43,325 +36,36 @@ from hbdesigner.model.pippack_model import (
     get_sidechain_logits,
     load_PIPPack,
 )
-from hbdesigner.data.protein import PDB_CHAIN_IDS, Protein
+from hbdesigner.data.protein import Protein
 from hbdesigner.scripts.preprocess_asmbs import load_metadata
-from hbdesigner.train.config import TrainConfig, init_empty
+from hbdesigner.train.config import TrainConfig
 from hbdesigner.train.trainer import SupervisedTrainer
-from hbdesigner.utils import cycle, seed_everything, worker_init
+from hbdesigner.utils import cycle, seed_everything, worker_init, init_empty
+from hbdesigner.scripts.train_hbdesigner import HBDesignerDataset
 
 
-class HBDesigner3Dataset(torch.utils.data.IterableDataset):
+class HBPackerDataset(HBDesignerDataset):
     """
-    Dataset for HBDesigner3 model.
+    Dataset for HPacker model.
 
     Iterates over clusters and samples a random assembly, then collects any valid networks.
     Randomly samples from candidate networks according to config params.
 
-    If packing, it featurizes the fully decoded network w/random sidechains.
-    If doing seq design, it randomly samples from all possible decoding steps [0, t - 1].
+    Packer dataset featurizes the fully decoded network w/random initial sidechains.
 
-    Expected dataset format: pdb_2021aug02_hbdesigner3
+    Expected dataset format:
         - ABCD.pt files for all PDBs
         - ABCD_N.npz files for all assemblies
         - ABCD_N.gml files for all assemblies
         - ABCD_N_hbnet.npz files for all HBNet designs
-
     """
 
     def __init__(self, cfg: TrainConfig, split: str = "train"):
-        # Load metadata
-        self.cfg = cfg
-        self.split = split
-        self.dir = self.cfg.model.hbdesigner.data_location
-        self.batch_size = self.cfg.model.hbdesigner.batch_size
-        self.MAX_LENGTH = self.batch_size
-        self.MAX_BFACTOR = 1000. # 40. # for eval purposes only
-        df = load_metadata(self.dir, split=split)
-
-        # Compile cluster -> chainid mapping
-        self.cdict = {}
-        for cluster in df["CLUSTER"].unique():
-            self.cdict[cluster] = df.loc[df["CLUSTER"] == cluster]["CHAINID"].values
-        self.keys = sorted(list(self.cdict.keys()))
-        if self.split != "test":
-            random.shuffle(self.keys)
-        self.start, self.end = 0, len(self.keys)
-
-    def __len__(self) -> int:
-        return len(self.keys)
-
-    def __iter__(self):
-        # Each worker gets a different chunk of the dataset
-        worker_info = torch.utils.data.get_worker_info()
-        if worker_info is None:
-            iter_start = self.start
-            iter_end = self.end
-        else:
-            per_worker = int(
-                np.ceil((self.end - self.start) / float(worker_info.num_workers))
-            )
-            id = worker_info.id
-            iter_start = self.start + id * per_worker
-            iter_end = min(iter_start + per_worker, self.end)
-        return iter(self.generate(iter_start, iter_end))
-
-    def generate(self, start: int, end: int):
-        """
-        Yields batches of samples from a worker on infinite loop.
-        Called by self.__iter__().
-
-        Arguments:
-            start (int): Start index of this worker's chunk of the dataset.
-            end (int): End index of this worker's chunk of the dataset.
-
-        Returns:
-            List(gd.Data): List of Data objects representing a batch before collation.
-
-        """
-        while True:
-            n_nodes = 0
-            samples = []
-            for idx in itertools.cycle(range(start, end)):
-                # Build up batch to reach specified size
-                sample = self.get(self.keys[idx])
-                if sample is not None:
-                    if n_nodes + sample.num_nodes > self.batch_size:
-                        yield samples
-                        n_nodes = 0
-                        samples = []
-                    n_nodes += sample.num_nodes
-                    samples.append(sample)
-
-    def get(self, idx: int) -> Union[gd.Data, None]:
-        """
-        Retrieves and featurizes a single query, if it is valid.
-        Called by self.generate(idx), which is called by self.__iter__().
-
-        Arguments:
-            idx (int): Cluster index for sampling.
-
-        Returns:
-            gd.Data: torch_geometric Data object representing a featurized protein.
-            OR
-            None: if assembly is missing or otherwise invalid, None is returned (idx is skipped).
-
-        """
-        # Load a random assembly within the chosen cluster
-        members = self.cdict[idx]
-        # Deterministic sampling for test set
-        if self.split != "test":
-            pdb_ch = members[torch.randperm(len(members))[0]]
-        else:
-            pdb_ch = members[self.cfg.seed % len(members)]
-        asmb = self._load_assembly(pdb_ch)
-        # Skip edge cases
-        if asmb is None:
-            return None
-        p, hbnet_arr = asmb
-
-        if p.n_res > self.MAX_LENGTH:
-            return None
-        return self.featurize(p, hbnet_arr)
-
-    def _sample_native_net(
-        self, p: Protein, g: nx.DiGraph
-    ) -> Union[Tuple[np.ndarray, np.ndarray], None]:
-        """
-        Given a Protein and Graph of networks, return one valid network.
-
-        Arguments:
-            p (Protein): Protein to be sampled from
-            g (nx.DiGraph): Graph representing network connectivity.
-
-        Returns:
-            np.ndarray: Array of network residue positions.
-            np.ndarray: Copy of p.aatype with all residues except network set to GLY.
-            OR
-            None: Returned if no valid network exists in the given Graph.
-
-        """
-        cc = list(nx.weakly_connected_components(g))
-        pos = []
-
-        # Check each network for intra/inter-chain character
-        sampling_probs = []
-        for c in cc:
-            sg = g.subgraph(c)
-            n_res = len(sg)
-            # If wrong size, don't sample
-            if (n_res > self.cfg.model.hbdesigner.max_res) or (
-                n_res < self.cfg.model.hbdesigner.min_res
-            ):
-                sampling_probs.append(0.0)
-            else:
-                nodes = list(sg.nodes(data=True))
-                chains = list(set([n[-1]["PDB_Chain"] for n in nodes]))
-
-                if self.cfg.model.hbdesigner.rescore:
-                    # Only filter if directed
-                    if self.cfg.model.hbdesigner.rescore_filter:
-                        net_sat = nodes[0][-1]["Network_Sat"]
-                        net_buns = nodes[0][-1]["Network_BUNs"]
-                        net_buphs = nodes[0][-1]["Network_BUPHs"]
-                        flag = (net_sat >= 0.5) and (net_buns <= n_res // 4) and (net_buphs <= 1 + (n_res // 4))
-                    else:
-                        flag = True
-                    if flag:
-                        sampling_probs.append(1.0)
-                    else:
-                        sampling_probs.append(0.0)
-                else:
-                    # Give different probs to inter/intra-chain cases
-                    if len(chains) == 1:
-                        sampling_probs.append(1.0)
-                    else:
-                        sampling_probs.append(self.cfg.model.hbdesigner.inter_weight)
-
-        # Check that at least one valid network exists
-        if (len(sampling_probs) < 1) or (sum(sampling_probs) <= 0.0):
-            return
-        
-        sampling_probs = np.array(sampling_probs) / sum(sampling_probs)
-        # Deterministic sampling for test set
-        if self.split != "test":
-            c = np.random.choice(cc, size=1, p=sampling_probs)[0]
-        else:
-            cc = [c for i, c in enumerate(cc) if sampling_probs[i] > 0.0]
-            if len(cc) < 1:
-                return
-            c = cc[self.cfg.seed % len(cc)]
-
-        nodes = g.subgraph(c).nodes(data=True)
-        for n in nodes:
-            ch = PDB_CHAIN_IDS.index(n[-1]["PDB_Chain"])
-            num = n[-1]["PDB_Number"]
-            pdb_pos = np.where((p.residue_index == num) * (p.chain_index == ch))[0]
-            pos.append(pdb_pos)
-
-        hbnet_aatype = deepcopy(p.aatype)
-        hbnet_aatype[:] = rc.restype_order["G"]
-        hbnet_pos = np.array(pos)
-        hbnet_aatype[hbnet_pos] = p.aatype[hbnet_pos]
-        return hbnet_pos, hbnet_aatype
-
-    def _load_assembly(self, pdb_ch: str) -> Union[Tuple[Protein, np.ndarray], None]:
-        """
-        Load assembly data, if present, for a PDB chain.
-
-        Arguments:
-            pdb_ch (str): Query string formatted in pdb_chain format (e.g., 1ABC_A).
-
-        Returns:
-            Protein: Loaded Protein object.
-            np.ndarray: HB network residue aatype array.
-            OR
-            None: If any files are missing from the entry or assembly, returns None (entry is skipped).
-        """
-        pdbid, chid = pdb_ch.split("_")
-        PREFIX = os.path.join(self.dir, pdbid[1:3], pdbid)
-        # Check if whole assembly is missing
-        pdb_pt = PREFIX + ".pt"
-        if not os.path.isfile(pdb_pt):
-            return
-
-        # Find candidate assemblies which contain chid chain
-        meta = torch.load(pdb_pt, weights_only=False)
-        asmb_ids = meta["asmb_ids"]
-        asmb_chains = meta["asmb_chains"]
-        asmb_candidates = set(
-            [a for a, b in zip(asmb_ids, asmb_chains) if chid in b.split(",")]
-        )
-
-        # Pick random assembly
-        asmb_candidates = sorted(list(asmb_candidates))
-        # If chain is missing from all assemblies, skip it
-        if len(asmb_candidates) < 1:
-            return
-        if self.split != "test":
-            asmb_id = asmb_candidates[torch.randperm(len(asmb_candidates))[0]]
-        else:
-            asmb_id = asmb_candidates[self.cfg.seed % len(asmb_candidates)]
-        asmb_npz = PREFIX + f"_{asmb_id}.npz"
-
-        if self.cfg.model.hbdesigner.rescore:
-            asmb_gml = PREFIX + f"_{asmb_id}_rescore.gml"
-        else:
-            asmb_gml = PREFIX + f"_{asmb_id}.gml"
-
-        # Check if files exist
-        if not os.path.isfile(asmb_npz) or not os.path.isfile(asmb_gml):
-            return
-
-        # Load Protein and Graph data
-        p = np.load(asmb_npz)
-        g = nx.read_gml(asmb_gml)
-
-        p = Protein(
-            atom27_xyz=p["atom27_xyz"],
-            atom27_mask=p["atom27_mask"],
-            aatype=p["aatype"],
-            residue_index=p["residue_index"],
-            chain_index=p["chain_index"],
-            b_factors=p["b_factors"],
-        )
-
-        # Native network sampling
-        network = self._sample_native_net(p, g)
-        if network is None:
-            return
-        else:
-            hbnet_pos, hbnet_arr = network
-
-        # Option to use HBNet designs (data augmentation)
-        asmb_hbnet = asmb_gml.removesuffix(".gml") + "_hbnet.npz"
-        if os.path.isfile(asmb_hbnet):
-            use_hbnet = np.random.binomial(
-                n=1, p=self.cfg.model.hbdesigner.hbnet_pct, size=1
-            ).astype(bool)[0]
-            if use_hbnet:
-                # Grab a random network
-                npy = np.load(asmb_hbnet)
-                keys = list(npy.keys())
-                assert len(keys) % 3 == 0
-                num_designs = len(keys) // 3
-                net = np.random.choice(np.arange(num_designs))
-
-                # Overwrite hbnet arrays
-                hbnet_aatype, hbnet_pos = npy[f"net{net}_aatype"], npy[f"net{net}_pos"]
-                hbnet_arr = deepcopy(p.aatype)
-                hbnet_arr[:] = rc.restype_order["G"]
-                hbnet_arr[hbnet_pos] = hbnet_aatype
-
-                # Update xyz coords with hbnet coords for packer
-                hbnet_xyz = npy[f"net{net}_atom14_xyz"]
-                p.clear_sequence()
-                p.atom27_xyz[hbnet_pos, :14, :] = hbnet_xyz
-                p.atom27_mask[hbnet_pos, :14] = np.prod(p.atom27_xyz[hbnet_pos, :14, :] != 0, axis=-1)
-                p.aatype[hbnet_pos] = hbnet_arr[hbnet_pos]
-
-        # If HBNet Pct is 100%, don't use any native nets
-        elif self.cfg.model.hbdesigner.hbnet_pct >= 1.0:
-            return
-
-        # If testing packer, filter out high b-factor chains
-        if (self.split == "test") and self.cfg.model.hbdesigner.pack:
-            net_atom_mask = p.atom27_mask[hbnet_pos, :14]
-            net_b_facs = p.b_factors[hbnet_pos, :14][net_atom_mask > 0]
-            if np.max(net_b_facs) > self.MAX_BFACTOR:
-                return None
-
-        # Prune chains not included in network
-        network_chains = np.unique(p.chain_index[hbnet_pos])
-        chain_mask = (
-            np.sum((p.chain_index[:, None] == network_chains[None, :]), axis=-1) > 0
-        )
-        p = p.mask(np.where(chain_mask)[0])
-        hbnet_arr = hbnet_arr[chain_mask]
-        return p, hbnet_arr
+        super().__init__(cfg, split)
 
     def featurize(self, p: Protein, hbnet_arr: np.ndarray) -> gd.Data:
         """
-        Featurize Protein and Graph info into HBDesigner3 model inputs.
+        Featurize Protein and Graph info into HBPacker model inputs.
 
         Arguments:
             p (Protein): Protein object.
@@ -371,7 +75,7 @@ class HBDesigner3Dataset(torch.utils.data.IterableDataset):
             gd.Data: torch_geometric Data object with featurized protein.
         """
 
-        c = self.cfg.model.hbdesigner
+        c = self.cfg.model.hbpacker
         # Override seq for HBNet
         hbnet_pos = np.where(hbnet_arr != rc.restype_order["G"])[0]
 
@@ -383,63 +87,31 @@ class HBDesigner3Dataset(torch.utils.data.IterableDataset):
         if np.sum(invalid) > 0.0:
             return
 
-        # Do step and residue sampling for training
-        n_res = hbnet_pos.size
-
-        # Packing always has all res decoded
-        if c.pack:
-            tstep = n_res
-        # Always run test from tstep 0 to get accurate cond info
-        elif self.split == "test":
-            tstep = 0
-        else:
-            tstep = random.randint(0, n_res - 1)
-
-        if c.pack_crop > 0.:
+        # Crop if requested
+        if c.pack_crop > 0.0:
             p, knn = crop_by_distance(p, hbnet_pos, c.pack_crop)
             hbnet_arr = hbnet_arr[knn]
             hbnet_pos = np.where(hbnet_arr != rc.restype_order["G"])[0]
 
-        # Randomly grab res done from options
-        res_done = np.random.choice(hbnet_pos, size=tstep, replace=False)
-        # Turn on loss mask for remaining positions
-        nll_mask = np.zeros_like(p.aatype, dtype=np.int32)
-        res_remain = np.setdiff1d(hbnet_pos, res_done)
-        nll_mask[res_remain] = 1
-        # Make mask for completed positions (used in loss calc)
-        done_mask = np.zeros_like(p.aatype, np.int32)
-        done_mask[res_done] = 1
-
-        if n_res != tstep:
-            chi_nll_mask = np.zeros_like(p.aatype, np.int32)
-        else:
-            chi_nll_mask = np.copy(done_mask)
+        # Chi mask includes all decoded network res
+        chi_mask = np.zeros_like(p.aatype, dtype=np.int32)
+        chi_mask[hbnet_pos] = 1
+        chi_mask_bool = chi_mask > 0
 
         # Clear any non-network res for ground-truth aatype and xyz
-        hbnet_mask = (nll_mask + done_mask) > 0
-        p.aatype[~hbnet_mask] = rc.restype_num
+        p.aatype[~chi_mask_bool] = rc.restype_num
         p.aatype[hbnet_pos] = hbnet_arr[hbnet_pos]
-        aatype_gt = p.aatype
-        p.atom27_xyz[~hbnet_mask, 4:] = 0.0
-        p.atom27_mask[~hbnet_mask, 4:] = 0
+        aatype = p.aatype
+        p.atom27_xyz[~chi_mask_bool, 4:] = 0.0
+        p.atom27_mask[~chi_mask_bool, 4:] = 0
         atom14_xyz_gt = p.atom27_xyz[:, :14]
         atom14_mask_gt = p.atom27_mask[:, :14]
         residue_index = p.residue_index
         chain_index = p.chain_index
 
-        # NOTE: saturation test
-        # pose = Pose()
-        # pose_from_pdbstring(pose, p.to_pdb(unk_to_gly=True))
-        # sat_stats = get_satisfaction(pose)
-        # # print(sat_stats)
-        # MIN_SAT = 0.5
-        # MAX_BUNS = 0
-        # if (sat_stats["saturation"] < MIN_SAT) or sat_stats["buried_heavy_unsats"] > MAX_BUNS:
-        #     return
-
         # Calculate ground truth chi dihedrals and their sin and cos.
         sc_dihedral_gt, sc_dihedral_mask_gt = calc_sc_dihedrals(
-            atom14_xyz_gt[:, :14], aatype_gt, return_mask=True
+            atom14_xyz_gt[:, :14], aatype, return_mask=True
         )
 
         chi_sincos_gt = np.stack(
@@ -448,33 +120,25 @@ class HBDesigner3Dataset(torch.utils.data.IterableDataset):
 
         # End of ground-truth features
         p = deepcopy(p)
-        # Clear any not-yet-decoded res for input aatype
-        p.aatype[nll_mask > 0] = rc.restype_num
-        aatype = p.aatype
         # Clear ALL sidechains from input feats
         p.atom27_xyz[:, 4:] = 0.0
         p.atom27_mask[:, 4:] = 0.0
         atom14_xyz = p.atom27_xyz[:, :14]
         atom14_mask = p.atom27_mask[:, :14]
 
-        # Get guide atom before bb xyz noising
-        guide_atom_xyz = get_guide_atom(
-            atom14_xyz[hbnet_pos, :3, :], c.guide_atom_sigma
-        )
-
         # Zero out starting dihedrals and get xyz to match
         sc_dihedral = np.zeros_like(sc_dihedral_gt)
-        sc_dihedral_mask = np.array(rc.chi_angles_mask)[aatype_gt]  # [L, 4]
+        sc_dihedral_mask = np.array(rc.chi_angles_mask)[aatype]  # [L, 4]
         atom14_xyz_sc, atom14_mask_sc = build_sc_from_chi(
-            atom14_xyz_gt[:, :4], aatype_gt, sc_dihedral, sc_dihedral_mask
+            atom14_xyz_gt[:, :4], aatype, sc_dihedral, sc_dihedral_mask
         )
-        atom14_xyz[chi_nll_mask > 0] = atom14_xyz_sc[chi_nll_mask > 0]
-        atom14_mask[chi_nll_mask > 0] = atom14_mask_sc[chi_nll_mask > 0]
+        atom14_xyz[chi_mask_bool] = atom14_xyz_sc[chi_mask_bool]
+        atom14_mask[chi_mask_bool] = atom14_mask_sc[chi_mask_bool]
 
         # Noise bb xyz to avoid seq rec cheating
         if (self.split == "train") and (c.bb_noise > 0.0):
             atom14_xyz[..., :5, :] = atom14_xyz[..., :5, :] + (
-                self.cfg.model.hbdesigner.bb_noise
+                self.cfg.model.hbpacker.bb_noise
                 * np.random.randn(*atom14_xyz[..., :5, :].shape)
             )
 
@@ -484,9 +148,8 @@ class HBDesigner3Dataset(torch.utils.data.IterableDataset):
         # Create the Data object
         protein_data = gd.Data(
             num_nodes=aatype.shape[0],
-            x=torch.zeros((1, 1)),  # x is used often to identify the device
-            # Ground truth seq and sidechains
-            aatype_gt=torch.from_numpy(aatype_gt).to(torch.long),  # [L]
+            x=torch.zeros((1, 1)),
+            # Ground truth sidechains
             atom14_xyz_gt=torch.from_numpy(atom14_xyz_gt).to(
                 torch.float32
             ),  # [L, 14, 3]
@@ -509,46 +172,8 @@ class HBDesigner3Dataset(torch.utils.data.IterableDataset):
                 torch.float32
             ),  # [L, 4, 2]
             # Masks and cond info
-            nll_mask=torch.from_numpy(nll_mask).to(torch.float32),  # [L]
-            done_mask=torch.from_numpy(done_mask).to(torch.long),  # [L]
-            chi_nll_mask=torch.from_numpy(chi_nll_mask).to(torch.float32),  # [L]
-            guide_atom_xyz=torch.from_numpy(guide_atom_xyz).to(torch.float32),  # [1, 3]
+            chi_mask=torch.from_numpy(chi_mask).to(torch.float32),  # [L]
         )
-
-        # If not using seq cond, set all res to UNK
-        hbnet_res = aatype_gt[res_remain]
-        unk_all = np.random.binomial(n=1, p=(1 - c.seq_cond_pct), size=1).astype(bool)[
-            0
-        ]
-        if unk_all:
-            hbnet_res[:] = rc.restype_num
-
-        # If using seq cond, check if doing partial or full cond
-        else:
-            unk_some = np.random.binomial(n=1, p=c.seq_cond_unk_pct, size=1).astype(
-                bool
-            )[0]
-            # If partial, set a random subset of residues to UNK
-            # If full, don't change any residues
-            if unk_some:
-                sample_probs = {
-                    1: [0.50, 0.50],
-                    2: [0.00, 1.00, 0.00],
-                    3: [0.00, 0.50, 0.50, 0.00],
-                    4: [0.00, 0.25, 0.50, 0.25, 0.00],
-                    5: [0.00, 0.16, 0.34, 0.34, 0.16, 0.00],
-                    6: [0.00, 0.10, 0.24, 0.32, 0.24, 0.10, 0.00],
-                }
-                probs = sample_probs[hbnet_res.size]
-                n_unk = np.random.choice(np.arange(len(probs)), 1, p=probs)
-                flips = np.random.choice(
-                    np.arange(hbnet_res.size), size=n_unk, replace=False
-                )
-                hbnet_res[flips] = rc.restype_num
-
-        protein_data["aatype_cond"] = torch.from_numpy(get_seq_cond(hbnet_res)).to(
-            torch.float32
-        )  # [1, 21]
 
         protein_data["c_idx"] = protein_data["chain_index"]
         return protein_data
@@ -576,211 +201,210 @@ class HBDesigner3Dataset(torch.utils.data.IterableDataset):
         # Get remaining res per set
         batch.net_res_num = torch.tensor(
             [
-                (batch.nll_mask[batch.aatype_batch == j]).sum()
+                (batch.chi_mask[batch.aatype_batch == j]).sum()
                 for j in range(batch.num_graphs)
             ],
         ).long()  # [B,]
         return batch
 
-    @staticmethod
-    def featurize_inference(
-        p: Protein,
-        n_res: int = 2,
-        guide_res: np.ndarray = None,
-        guide_radius: float = 1e6,
-        guide_seq: str = None,
-        min_burial: float = 0.0,
-    ) -> gd.Data:
-        """
-        Featurize Protein for inference without available reference HBNet.
+    # @staticmethod
+    # def featurize_inference(
+    #     p: Protein,
+    #     n_res: int = 2,
+    #     guide_res: np.ndarray = None,
+    #     guide_radius: float = 1e6,
+    #     guide_seq: str = None,
+    #     min_burial: float = 0.0,
+    # ) -> gd.Data:
+    #     """
+    #     Featurize Protein for inference without available reference HBNet.
 
-        Arguments:
-            p (Protein): Protein object.
-            n_res (int): Number of residues to include in predicted network. Default is 2.
-            guide_res (np.ndarray): Array of positions for inclusion in guide atom centroid calculation. Default is None (ignored).
-            guide_radius (float): Radius around the guide atom to allow designable. Default is 1e6 (all residues).
-            guide_seq (str): Guide sequence to enforce in all designs. Default is None (all UNK).
-            min_burial (float): Minimum burial value to allow designable. Default is 0.0. Core is 5.2, Surface is 2.0.
+    #     Arguments:
+    #         p (Protein): Protein object.
+    #         n_res (int): Number of residues to include in predicted network. Default is 2.
+    #         guide_res (np.ndarray): Array of positions for inclusion in guide atom centroid calculation. Default is None (ignored).
+    #         guide_radius (float): Radius around the guide atom to allow designable. Default is 1e6 (all residues).
+    #         guide_seq (str): Guide sequence to enforce in all designs. Default is None (all UNK).
+    #         min_burial (float): Minimum burial value to allow designable. Default is 0.0. Core is 5.2, Surface is 2.0.
 
-        Returns:
-            gd.Data: torch_geometric Data object with featurized protein.
-        """
-        # Protein features
-        p.clear_sequence()
-        aatype = p.aatype
-        atom14_xyz = p.atom27_xyz[:, :14]
-        atom14_mask = p.atom27_mask[:, :14]
-        residue_index = p.residue_index
-        chain_index = p.chain_index
-        bb_dihedral = calc_bb_dihedrals(
-            p.atom27_xyz[:, :14], p.residue_index, return_mask=False
-        )
+    #     Returns:
+    #         gd.Data: torch_geometric Data object with featurized protein.
+    #     """
+    #     # Protein features
+    #     p.clear_sequence()
+    #     aatype = p.aatype
+    #     atom14_xyz = p.atom27_xyz[:, :14]
+    #     atom14_mask = p.atom27_mask[:, :14]
+    #     residue_index = p.residue_index
+    #     chain_index = p.chain_index
+    #     bb_dihedral = calc_bb_dihedrals(
+    #         p.atom27_xyz[:, :14], p.residue_index, return_mask=False
+    #     )
 
-        # Zero out starting dihedrals and get xyz to match
-        sc_dihedral = np.zeros((p.n_res, 4), dtype=np.float32)  # [L, 4]
-        sc_dihedral_mask = np.array(rc.chi_angles_mask)[aatype]  # [L, 4]
+    #     # Zero out starting dihedrals and get xyz to match
+    #     sc_dihedral = np.zeros((p.n_res, 4), dtype=np.float32)  # [L, 4]
+    #     sc_dihedral_mask = np.array(rc.chi_angles_mask)[aatype]  # [L, 4]
 
-        # Create the Data object
-        protein_data = gd.Data(
-            num_nodes=aatype.shape[0],
-            x=torch.zeros((1, 1)),  # x is used often to identify the device
-            aatype=torch.from_numpy(aatype).to(torch.long),  # [L]
-            atom14_xyz=torch.from_numpy(atom14_xyz).to(torch.float32),  # [L, 14, 3]
-            atom14_mask=torch.from_numpy(atom14_mask).to(torch.float32),  # [L, 14]
-            residue_index=torch.from_numpy(residue_index).to(torch.int32),  # [L]
-            chain_index=torch.from_numpy(chain_index).to(torch.int32),  # [L]
-            bb_dihedral=torch.from_numpy(bb_dihedral).to(torch.float32),  # [L, 3]
-            # Empty dihedrals prior to design
-            sc_dihedral=torch.from_numpy(sc_dihedral).to(torch.float32),  # [L, 4]
-            sc_dihedral_mask=torch.from_numpy(sc_dihedral_mask).to(
-                torch.float32
-            ),  # [L, 4]
-        )
+    #     # Create the Data object
+    #     protein_data = gd.Data(
+    #         num_nodes=aatype.shape[0],
+    #         x=torch.zeros((1, 1)),  # x is used often to identify the device
+    #         aatype=torch.from_numpy(aatype).to(torch.long),  # [L]
+    #         atom14_xyz=torch.from_numpy(atom14_xyz).to(torch.float32),  # [L, 14, 3]
+    #         atom14_mask=torch.from_numpy(atom14_mask).to(torch.float32),  # [L, 14]
+    #         residue_index=torch.from_numpy(residue_index).to(torch.int32),  # [L]
+    #         chain_index=torch.from_numpy(chain_index).to(torch.int32),  # [L]
+    #         bb_dihedral=torch.from_numpy(bb_dihedral).to(torch.float32),  # [L, 3]
+    #         # Empty dihedrals prior to design
+    #         sc_dihedral=torch.from_numpy(sc_dihedral).to(torch.float32),  # [L, 4]
+    #         sc_dihedral_mask=torch.from_numpy(sc_dihedral_mask).to(
+    #             torch.float32
+    #         ),  # [L, 4]
+    #     )
 
-        # nll_mask is mask of designable positions
-        nll_mask = np.ones_like(p.aatype, dtype=np.int32)
-        protein_data["nll_mask"] = torch.from_numpy(nll_mask).to(torch.float32)
-        protein_data["aatype_masked"] = torch.from_numpy(p.aatype).to(torch.long)
+    #     # nll_mask is mask of designable positions
+    #     nll_mask = np.ones_like(p.aatype, dtype=np.int32)
+    #     protein_data["nll_mask"] = torch.from_numpy(nll_mask).to(torch.float32)
+    #     protein_data["aatype_masked"] = torch.from_numpy(p.aatype).to(torch.long)
 
-        # done_mask is mask of already-designed positions
-        done_mask = np.zeros_like(p.aatype, np.int32)
-        protein_data["done_mask"] = torch.from_numpy(done_mask).to(torch.long)
+    #     # done_mask is mask of already-designed positions
+    #     done_mask = np.zeros_like(p.aatype, np.int32)
+    #     protein_data["done_mask"] = torch.from_numpy(done_mask).to(torch.long)
 
-        # Guide atom cond info
-        guide_atom_sigma = 4.0  # sd of guide atom sampling distribution
-        if guide_res is None:
-            guide_atom_xyz = np.zeros_like(
-                atom14_xyz[0, 0:1, :],
-            )
-            des_mask = np.prod(atom14_mask[..., :4], axis=-1)
-        else:
-            guide_atom_xyz = get_guide_atom(
-                atom14_xyz[guide_res, :3, :], guide_atom_sigma
-            )
-            # Make mask of nearby residues
-            cb_xyz = impute_CB(
-                atom14_xyz[..., 0, :], atom14_xyz[..., 1, :], atom14_xyz[..., 2, :]
-            )
-            cb_dist = np.squeeze(cdist(cb_xyz, guide_atom_xyz))  # [L]
-            des_mask = (cb_dist <= guide_radius) * np.prod(
-                atom14_mask[..., :3], axis=-1
-            )
+    #     # Guide atom cond info
+    #     guide_atom_sigma = 4.0  # sd of guide atom sampling distribution
+    #     if guide_res is None:
+    #         guide_atom_xyz = np.zeros_like(
+    #             atom14_xyz[0, 0:1, :],
+    #         )
+    #         des_mask = np.prod(atom14_mask[..., :4], axis=-1)
+    #     else:
+    #         guide_atom_xyz = get_guide_atom(
+    #             atom14_xyz[guide_res, :3, :], guide_atom_sigma
+    #         )
+    #         # Make mask of nearby residues
+    #         cb_xyz = impute_CB(
+    #             atom14_xyz[..., 0, :], atom14_xyz[..., 1, :], atom14_xyz[..., 2, :]
+    #         )
+    #         cb_dist = np.squeeze(cdist(cb_xyz, guide_atom_xyz))  # [L]
+    #         des_mask = (cb_dist <= guide_radius) * np.prod(
+    #             atom14_mask[..., :3], axis=-1
+    #         )
 
-        # Add burial constraint to designable positions
-        pose = Pose()
-        pose_from_pdbstring(pose, p.to_pdb(unk_to_gly=True))
-        sc_neighbors = np.array(calc_sc_neighbors(pose))
-        sc_neighbor_mask = sc_neighbors >= min_burial
-        des_mask *= sc_neighbor_mask
+    #     # Add burial constraint to designable positions
+    #     pose = Pose()
+    #     pose_from_pdbstring(pose, p.to_pdb(unk_to_gly=True))
+    #     sc_neighbors = np.array(calc_sc_neighbors(pose))
+    #     sc_neighbor_mask = sc_neighbors >= min_burial
+    #     des_mask *= sc_neighbor_mask
 
-        protein_data["des_mask"] = torch.from_numpy(des_mask).to(torch.bool)
-        protein_data["guide_atom_xyz"] = torch.from_numpy(guide_atom_xyz).to(
-            torch.float32
-        )  # [1, 3]
+    #     protein_data["des_mask"] = torch.from_numpy(des_mask).to(torch.bool)
+    #     protein_data["guide_atom_xyz"] = torch.from_numpy(guide_atom_xyz).to(
+    #         torch.float32
+    #     )  # [1, 3]
 
-        # Parse guide sequence
-        guide_seq = "X" * n_res if guide_seq is None else guide_seq
+    #     # Parse guide sequence
+    #     guide_seq = "X" * n_res if guide_seq is None else guide_seq
 
-        # Seq cond info
-        guide_seq = np.array(
-            [rc.restype_order.get(aa, rc.restype_num) for aa in guide_seq]
-        )
-        protein_data["aatype_cond"] = torch.from_numpy(get_seq_cond(guide_seq)).to(
-            torch.float32
-        )  # [1, 21]
-        protein_data["c_idx"] = protein_data["chain_index"]
-        return protein_data
+    #     # Seq cond info
+    #     guide_seq = np.array(
+    #         [rc.restype_order.get(aa, rc.restype_num) for aa in guide_seq]
+    #     )
+    #     protein_data["aatype_cond"] = torch.from_numpy(get_seq_cond(guide_seq)).to(
+    #         torch.float32
+    #     )  # [1, 21]
+    #     protein_data["c_idx"] = protein_data["chain_index"]
+    #     return protein_data
 
-    @staticmethod
-    def featurize_inference_packing(
-        p: Protein,
-        hbnet_pos: np.ndarray,
-        hbnet_res: np.ndarray,
-        pack_crop: float = 10.0,
-    ) -> gd.Data:
-        """
-        Featurize Protein for inference without available reference HBNet.
+    # @staticmethod
+    # def featurize_inference_packing(
+    #     p: Protein,
+    #     hbnet_pos: np.ndarray,
+    #     hbnet_res: np.ndarray,
+    #     pack_crop: float = 10.0,
+    # ) -> gd.Data:
+    #     """
+    #     Featurize Protein for inference without available reference HBNet.
 
-        Arguments:
-            p (Protein): Protein object.
-            hbnet_pos (np.ndarray): Array of positions for inclusion in predicted network.
-            hbnet_res (np.ndarray): Array of residues for inclusion in predicted network.
-            pack_crop (float): Distance in Angstroms to crop the protein around the network. Default is 10.0.
+    #     Arguments:
+    #         p (Protein): Protein object.
+    #         hbnet_pos (np.ndarray): Array of positions for inclusion in predicted network.
+    #         hbnet_res (np.ndarray): Array of residues for inclusion in predicted network.
+    #         pack_crop (float): Distance in Angstroms to crop the protein around the network. Default is 10.0.
 
-        Returns:
-            gd.Data: torch_geometric Data object with featurized protein.
-        """
-        # Protein features
-        p.clear_sequence()
-        p.aatype[hbnet_pos] = hbnet_res
+    #     Returns:
+    #         gd.Data: torch_geometric Data object with featurized protein.
+    #     """
+    #     # Protein features
+    #     p.clear_sequence()
+    #     p.aatype[hbnet_pos] = hbnet_res
 
-        # Crop before featurizing
-        if pack_crop > 0.:
-            p, knn = crop_by_distance(p, hbnet_pos, pack_crop)
-            hbnet_pos = np.where(p.aatype != rc.restype_num)[0]
-        else:
-            knn = np.arange(p.n_res)
+    #     # Crop before featurizing
+    #     if pack_crop > 0.:
+    #         p, knn = crop_by_distance(p, hbnet_pos, pack_crop)
+    #         hbnet_pos = np.where(p.aatype != rc.restype_num)[0]
+    #     else:
+    #         knn = np.arange(p.n_res)
 
-        aatype = p.aatype
-        atom14_xyz = p.atom27_xyz[:, :14]
-        atom14_mask = p.atom27_mask[:, :14]
-        residue_index = p.residue_index
-        chain_index = p.chain_index
-        bb_dihedral = calc_bb_dihedrals(
-            p.atom27_xyz[:, :14], p.residue_index, return_mask=False
-        )
+    #     aatype = p.aatype
+    #     atom14_xyz = p.atom27_xyz[:, :14]
+    #     atom14_mask = p.atom27_mask[:, :14]
+    #     residue_index = p.residue_index
+    #     chain_index = p.chain_index
+    #     bb_dihedral = calc_bb_dihedrals(
+    #         p.atom27_xyz[:, :14], p.residue_index, return_mask=False
+    #     )
 
-        # Zero out starting dihedrals and get xyz to match
-        sc_dihedral = np.zeros((p.n_res, 4), dtype=np.float32)  # [L, 4]
-        sc_dihedral_mask = np.array(rc.chi_angles_mask)[aatype]  # [L, 4]
+    #     # Zero out starting dihedrals and get xyz to match
+    #     sc_dihedral = np.zeros((p.n_res, 4), dtype=np.float32)  # [L, 4]
+    #     sc_dihedral_mask = np.array(rc.chi_angles_mask)[aatype]  # [L, 4]
 
-        # Zero out starting dihedrals and get xyz to match
-        atom14_xyz_sc, atom14_mask_sc = build_sc_from_chi(
-            atom14_xyz[:, :4], aatype, sc_dihedral, sc_dihedral_mask
-        )
-        atom14_xyz[hbnet_pos] = atom14_xyz_sc[hbnet_pos]
-        atom14_mask[hbnet_pos] = atom14_mask_sc[hbnet_pos]
+    #     # Zero out starting dihedrals and get xyz to match
+    #     atom14_xyz_sc, atom14_mask_sc = build_sc_from_chi(
+    #         atom14_xyz[:, :4], aatype, sc_dihedral, sc_dihedral_mask
+    #     )
+    #     atom14_xyz[hbnet_pos] = atom14_xyz_sc[hbnet_pos]
+    #     atom14_mask[hbnet_pos] = atom14_mask_sc[hbnet_pos]
 
-        # Create the Data object
-        protein_data = gd.Data(
-            num_nodes=aatype.shape[0],
-            x=torch.zeros((1, 1)),  # x is used often to identify the device
-            aatype=torch.from_numpy(aatype).to(torch.long),  # [L]
-            atom14_xyz=torch.from_numpy(atom14_xyz).to(torch.float32),  # [L, 14, 3]
-            atom14_mask=torch.from_numpy(atom14_mask).to(torch.float32),  # [L, 14]
-            residue_index=torch.from_numpy(residue_index).to(torch.int32),  # [L]
-            chain_index=torch.from_numpy(chain_index).to(torch.int32),  # [L]
-            bb_dihedral=torch.from_numpy(bb_dihedral).to(torch.float32),  # [L, 3]
-            # Empty dihedrals prior to design
-            sc_dihedral=torch.from_numpy(sc_dihedral).to(torch.float32),  # [L, 4]
-            sc_dihedral_mask=torch.from_numpy(sc_dihedral_mask).to(
-                torch.float32
-            ),  # [L, 4]
-            pack_knn=torch.from_numpy(knn).to(torch.long),  # [K]
-        )
+    #     # Create the Data object
+    #     protein_data = gd.Data(
+    #         num_nodes=aatype.shape[0],
+    #         x=torch.zeros((1, 1)),  # x is used often to identify the device
+    #         aatype=torch.from_numpy(aatype).to(torch.long),  # [L]
+    #         atom14_xyz=torch.from_numpy(atom14_xyz).to(torch.float32),  # [L, 14, 3]
+    #         atom14_mask=torch.from_numpy(atom14_mask).to(torch.float32),  # [L, 14]
+    #         residue_index=torch.from_numpy(residue_index).to(torch.int32),  # [L]
+    #         chain_index=torch.from_numpy(chain_index).to(torch.int32),  # [L]
+    #         bb_dihedral=torch.from_numpy(bb_dihedral).to(torch.float32),  # [L, 3]
+    #         # Empty dihedrals prior to design
+    #         sc_dihedral=torch.from_numpy(sc_dihedral).to(torch.float32),  # [L, 4]
+    #         sc_dihedral_mask=torch.from_numpy(sc_dihedral_mask).to(
+    #             torch.float32
+    #         ),  # [L, 4]
+    #         pack_knn=torch.from_numpy(knn).to(torch.long),  # [K]
+    #     )
 
-        # nll_mask is mask of designable positions
-        nll_mask = np.ones_like(p.aatype, dtype=np.int32)
-        protein_data["nll_mask"] = torch.from_numpy(nll_mask).to(torch.float32)
-        protein_data["aatype_masked"] = torch.from_numpy(p.aatype).to(torch.long)
+    #     # nll_mask is mask of designable positions
+    #     nll_mask = np.ones_like(p.aatype, dtype=np.int32)
+    #     protein_data["nll_mask"] = torch.from_numpy(nll_mask).to(torch.float32)
+    #     protein_data["aatype_masked"] = torch.from_numpy(p.aatype).to(torch.long)
 
-        # done_mask is mask of already-designed positions
-        done_mask = np.zeros_like(p.aatype, np.int32)
-        protein_data["done_mask"] = torch.from_numpy(done_mask).to(torch.long)
+    #     # done_mask is mask of already-designed positions
+    #     done_mask = np.zeros_like(p.aatype, np.int32)
+    #     protein_data["done_mask"] = torch.from_numpy(done_mask).to(torch.long)
 
-        # chi nll mask is mask of packable positions
-        protein_data["chi_nll_mask"] = torch.from_numpy(p.aatype != rc.restype_num).to(torch.float32)
+    #     # chi nll mask is mask of packable positions
+    #     protein_data["chi_nll_mask"] = torch.from_numpy(p.aatype != rc.restype_num).to(torch.float32)
 
-        protein_data["c_idx"] = protein_data["chain_index"]
-        return protein_data
+    #     protein_data["c_idx"] = protein_data["chain_index"]
+    #     return protein_data
 
 
-class HBDesignerTrainer(SupervisedTrainer):
+class HBPackerTrainer(SupervisedTrainer):
     def set_default_hps(self, base: TrainConfig) -> None:
-        base.model.model_name = "HBDesigner"
-        base.model.hbdesigner.data_location = "/data/pdb_2021aug02"
-        base.model.hbdesigner.max_res = 6
-        base.model.hbdesigner.min_res = 2
+        base.model.model_name = "HBPacker"
+        base.model.hbpacker.max_res = 6
+        base.model.hbpacker.min_res = 2
 
     def setup(self) -> None:
         super().setup()
@@ -791,7 +415,7 @@ class HBDesignerTrainer(SupervisedTrainer):
         print(f"Number of trainable parameters:\t{n}")
 
     def setup_data(self) -> None:
-        c = self.cfg.model.hbdesigner
+        c = self.cfg.model.hbpacker
         if c.pack_method == "pippack":
             print(f"Loading PIPPack ({c.pack_mode})!")
             if c.pack_mode == "fast":
@@ -802,8 +426,8 @@ class HBDesignerTrainer(SupervisedTrainer):
                 pippack_models = 3
             self.load_pippack(n_models=pippack_models)
 
-        self.train_data = HBDesigner3Dataset(self.cfg, split="train")
-        self.valid_data = HBDesigner3Dataset(self.cfg, split="valid")
+        self.train_data = HBPackerDataset(self.cfg, split="train")
+        self.valid_data = HBPackerDataset(self.cfg, split="valid")
 
     def load_pippack(self, n_models: int = 1) -> None:
         """
@@ -843,7 +467,7 @@ class HBDesignerTrainer(SupervisedTrainer):
         )
 
     def build_test_data_loader(self) -> DataLoader:
-        self.test_data = HBDesigner3Dataset(self.cfg, split="test")
+        self.test_data = HBPackerDataset(self.cfg, split="test")
         return self._make_data_loader(self.test_data)
 
     @torch.no_grad()
@@ -1111,8 +735,8 @@ class HBDesignerTrainer(SupervisedTrainer):
                 )
             else:
                 proteins = pack_with_rosetta(
-                    proteins, 
-                    n_workers=n_workers, 
+                    proteins,
+                    n_workers=n_workers,
                     # mode="pdb2pqr",
                     mode="reduce",
                 )
@@ -1147,7 +771,9 @@ class HBDesignerTrainer(SupervisedTrainer):
             b.sc_dihedral_mask = b.sc_dihedral_mask_gt
             b.aatype[b.aatype == rc.restype_order["G"]] = rc.restype_num
             b.chi_nll_mask = (b.aatype != rc.restype_num).to(torch.long)
-            b, results = self.pack_model.run_pack_recyc(b.to(self.cfg.device), c.num_recycles)
+            b, results = self.pack_model.run_pack_recyc(
+                b.to(self.cfg.device), c.num_recycles
+            )
             non_net = b.aatype == 20
             b.atom14_xyz[non_net, 4:] = 0.0
             b.atom14_mask[non_net, 4:] = 0.0
@@ -1166,8 +792,8 @@ class HBDesignerTrainer(SupervisedTrainer):
                 )
             else:
                 proteins = pack_with_rosetta(
-                    proteins, 
-                    n_workers=n_workers, 
+                    proteins,
+                    n_workers=n_workers,
                     mode="reduce",
                 )
                 print("ran reduce/hydride!")
@@ -1194,8 +820,8 @@ class HBDesignerTrainer(SupervisedTrainer):
         try:
             runtimes = [p.pack_time for p in proteins]
         except AttributeError:
-            runtimes = [0. for p in proteins]
-            
+            runtimes = [0.0 for p in proteins]
+
         return proteins, b_list, runtimes
 
     def score_protein(self, p: Protein) -> Dict[str, float]:
@@ -1209,16 +835,14 @@ class HBDesignerTrainer(SupervisedTrainer):
             Dict[str, float]: Dict of single protein metrics and their labels.
         """
 
-
-
         # Get bonds and energy metrics from Rosetta
         bond_list, rosetta_stats = rosetta_hbond_detect(
             p,
             max_energy=0.0,
-            optH=True, # True
+            optH=True,  # True
             optH_MCA=False,
         )
-        print("bond list rosetta:", bond_list, '***')
+        print("bond list rosetta:", bond_list, "***")
 
         # bond_list, rosetta_stats = biotite_hbond_detect(
         #     p,
@@ -1368,9 +992,9 @@ class HBDesignerTrainer(SupervisedTrainer):
             Sequence[Protein]: List of repacked Proteins.
 
         """
-        assert (
-            self.pippack is not None
-        ), "Error: you need to load PIPPack before using it!"
+        assert self.pippack is not None, (
+            "Error: you need to load PIPPack before using it!"
+        )
         # Prep batch for PIPPack
         p_batch = []
         for p in proteins:
@@ -1383,12 +1007,18 @@ class HBDesignerTrainer(SupervisedTrainer):
 
             # PolyALA backbone works best
             p_b["aatype"][p_b["aatype"] == rc.restype_num] = rc.restype_order["A"]
-            p_b["atom14_xyz"][:, 4] = impute_CB(p_b["atom14_xyz"][:, 0], p_b["atom14_xyz"][:, 1], p_b["atom14_xyz"][:, 2])
+            p_b["atom14_xyz"][:, 4] = impute_CB(
+                p_b["atom14_xyz"][:, 0],
+                p_b["atom14_xyz"][:, 1],
+                p_b["atom14_xyz"][:, 2],
+            )
             p_b["atom14_mask"][:, 4] = torch.prod(p_b["atom14_mask"][:, :4], dim=-1)
 
             # Zero out sc dihedrals and get new dihedral masks from aatype
             netres = np.where(p_b["aatype"] != rc.restype_order["A"])[0]
-            p_b["atom14_xyz"][netres, 5:] += 1e-4 # make nonzero to get correct dihedral masks
+            p_b["atom14_xyz"][netres, 5:] += (
+                1e-4  # make nonzero to get correct dihedral masks
+            )
             p_b["sc_dihedral"], p_b["sc_dihedral_mask"] = calc_sc_dihedrals(
                 p_b["atom14_xyz"][:, :14], p_b["aatype"], return_mask=True
             )
@@ -1396,9 +1026,9 @@ class HBDesignerTrainer(SupervisedTrainer):
 
             # Rebuild xyz based on zeroed dihedrals
             atom14_xyz_sc, atom14_mask_sc = build_sc_from_chi(
-                p_b["atom14_xyz"][netres, :4], 
-                p_b["aatype"][netres], 
-                p_b["sc_dihedral"][netres], 
+                p_b["atom14_xyz"][netres, :4],
+                p_b["aatype"][netres],
+                p_b["sc_dihedral"][netres],
                 p_b["sc_dihedral_mask"][netres],
             )
             p_b["atom14_xyz"][netres] = atom14_xyz_sc
@@ -1430,89 +1060,38 @@ class HBDesignerTrainer(SupervisedTrainer):
             p.aatype[p.aatype == rc.restype_order["A"]] = rc.restype_order["G"]
         return proteins
 
-    def load_model_state(self, ckpt_path: str, packer: bool = False) -> None:
+    def load_model_state(self, ckpt_path: str) -> None:
         # Load weights from saved checkpoint.
         map_location = {"cuda:0": f"cuda:{self.rank}"}
         state = torch.load(ckpt_path, map_location=map_location)
 
-        if not packer:
-            self.model.load_state_dict(state["model_state_dict"])
-            self.model.to(self.device)
+        self.model.load_state_dict(state["model_state_dict"])
+        self.model.to(self.device)
 
-            # Optimizer and scheduler info.
-            self.opt.load_state_dict(state["opt_state_dict"])
-            if self.cfg.opt.lr_decay is not None:
-                self.lr_sched.load_state_dict(state["lr_sched"])
+        # Optimizer and scheduler info.
+        self.opt.load_state_dict(state["opt_state_dict"])
+        if self.cfg.opt.lr_decay is not None:
+            self.lr_sched.load_state_dict(state["lr_sched"])
 
-            # Update initial training step.
-            self.initial_step = state["step"]
-            if self.initial_step > self.cfg.num_training_steps:
-                raise ValueError(
-                    f"Current initial_step ({self.initial_step}) > num_training_steps ({self.cfg.num_training_steps}!"
-                )
-        else:
-            self.pack_model.load_state_dict(state["model_state_dict"])
-            self.pack_model.to(self.device)
+        # Update initial training step.
+        self.initial_step = state["step"]
+        if self.initial_step > self.cfg.num_training_steps:
+            raise ValueError(
+                f"Current initial_step ({self.initial_step}) > num_training_steps ({self.cfg.num_training_steps}!"
+            )
 
 
-def build_hbdes3_config_longleaf():
+def build_hbpacker_config_longleaf():
     config: TrainConfig = init_empty(TrainConfig())
-    # config.log_dir = f"/users/d/i/dieckhau/dev/hbdes3_logs/{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+    config.log_dir = f"/work/users/d/i/dieckhau/sandbox/HBDesigner/logs/hbpacker/{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
     config.device = "cuda:0" if torch.cuda.is_available() else "cpu"
     config.seed = 42
 
     # Training settings
     config.validate_every = 1_024
-    config.num_validation_gen_steps = 128
+    config.num_validation_batches = 128
     config.checkpoint_every = 50_000
-    config.num_training_steps = 150_000
-    config.model.hbdesigner.batch_size = 10_000
-    config.num_workers = 8
-    config.print_every = 16
-
-    # Loss and learning rate settings
-    config.opt.opt = "noam"
-    config.opt.adam_eps = 1e-9
-    config.opt.lr_decay = None
-    config.opt.noam_factor = 0.5
-    config.model.hbdesigner.loss_type = "focal"
-    config.model.hbdesigner.focal_gamma = 2.0
-    config.model.hbdesigner.seq_nll_weight = 1.0
-    config.model.hbdesigner.net_res_nll_weight = 1.0
-
-    # Conditioning info
-    config.model.hbdesigner.guide_atom_pct = 0.5
-    config.model.hbdesigner.guide_atom_sigma = 4.0
-    config.model.hbdesigner.seq_cond_pct = 0.2
-    config.model.hbdesigner.seq_cond_unk_pct = 0.5
-
-    # Other model settings
-    config.model.hbdesigner.bb_noise = 0.02
-    config.model.model_name = "HBDesigner3"
-    config.model.hbdesigner.pack = False
-    config.model.hbdesigner.data_location = (
-        "/work/users/d/i/dieckhau/pdb_2021aug02_hbdesigner4/"
-    )
-
-    # Rescore/curation settings
-    config.model.hbdesigner.rescore = False
-    config.model.hbdesigner.rescore_filter = False
-
-    return config
-
-
-def build_hbdes3_pack_config_longleaf():
-    config: TrainConfig = init_empty(TrainConfig())
-    config.log_dir = f"/users/d/i/dieckhau/dev/hbdes3_pack_logs/{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
-    config.device = "cuda:0" if torch.cuda.is_available() else "cpu"
-    config.seed = 42
-
-    # Training settings
-    config.validate_every = 1_024
-    config.num_validation_gen_steps = 128
-    config.checkpoint_every = 50_000
-    config.num_training_steps = 200_000
-    config.model.hbdesigner.batch_size = 10_000
+    config.num_training_steps = 50_000
     config.num_workers = 16
     config.print_every = 16
 
@@ -1521,153 +1100,39 @@ def build_hbdes3_pack_config_longleaf():
     config.opt.adam_eps = 1e-9
     config.opt.lr_decay = None
     config.opt.noam_factor = 0.5
-    config.model.hbdesigner.loss_type = "focal"
-    config.model.hbdesigner.focal_gamma = 2.0
 
     # Other model settings
-    config.model.hbdesigner.bb_noise = 0.02 # 0.02
-    config.model.model_name = "HBDesigner3"
-    config.model.hbdesigner.data_location = (
+    config.model.hbpacker.bb_noise = 0.02
+    config.model.model_name = "HBPacker"
+    config.model.hbpacker.data_location = (
         "/work/users/d/i/dieckhau/pdb_2021aug02_hbdesigner4/"
     )
-    
-    # Loss and learning rate settings (optimized)
-    config.model.hbdesigner.seq_nll_weight = 0.0
-    config.model.hbdesigner.net_res_nll_weight = 0.0
+    config.model.hbpacker.batch_size = 10_000
 
     # Packing config
-    config.model.hbdesigner.sc_msd_weight = 1.0
-    config.model.hbdesigner.chi_mse_weight = 1.0
-    config.model.hbdesigner.chi_norm_weight = 0.1
+    config.model.hbpacker.sc_msd_weight = 1.0
+    config.model.hbpacker.chi_mse_weight = 1.0
+    config.model.hbpacker.chi_norm_weight = 0.1
 
-    config.model.hbdesigner.sc_clash_weight = 0.2
-    config.model.hbdesigner.orient_msd_weight = 0.2
-    config.model.hbdesigner.reweight_chi_mse = True
-    config.model.hbdesigner.num_recycles = 3
-    config.model.hbdesigner.pack = True
-    config.model.hbdesigner.pack_crop = 10.
-    config.model.hbdesigner.knn_k = 24
+    config.model.hbpacker.sc_clash_weight = 0.2
+    config.model.hbpacker.orient_msd_weight = 0.2
+    config.model.hbpacker.reweight_chi_mse = True
+    config.model.hbpacker.num_recycles = 3
 
-    # Rescore/curation settings
-    config.model.hbdesigner.rescore = True
-    config.model.hbdesigner.rescore_filter = True
+    config.model.hbpacker.pack_crop = 10.0
+    config.model.hbpacker.knn_k = 24
 
     return config
 
-
-def build_resume_config():
-    """Use this to load existing checkpoint config to ensure consistency"""
-    # Load existing config from disk to ensure match
-    filename = "/home/hdieckhaus/scripts/ProteinGFN/hbdesigner_logs/hbdes3/2025-06-10_11-03-42/config.yaml"
-    config = get_config_from_file(filename)
-
-    # Make changes (training steps, datasets, etc)
-    config.num_training_steps = 500_000
-    return config
-
-
-def get_config_from_file(filename):
-    assert os.path.isfile(filename), f"Invalid config file {filename} specified."
-    return OmegaConf.load(filename)
-
-def build_hbdesigner_config_wout():
-    config: TrainConfig = init_empty(TrainConfig())
-    # config.log_dir = f"/users/d/i/dieckhau/dev/hbdes3_logs/{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
-    config.device = "cuda:0" if torch.cuda.is_available() else "cpu"
-    config.seed = 42
-
-    # Training settings
-    config.validate_every = 1_024
-    config.num_validation_gen_steps = 128
-    config.checkpoint_every = 50_000
-    config.num_training_steps = 150_000
-    config.model.hbdesigner.batch_size = 10_000
-    config.num_workers = 24
-    config.print_every = 1
-
-    # Loss and learning rate settings
-    config.opt.opt = "noam"
-    config.opt.adam_eps = 1e-9
-    config.opt.lr_decay = None
-    config.opt.noam_factor = 0.5
-    config.model.hbdesigner.loss_type = "focal"
-    config.model.hbdesigner.focal_gamma = 2.0
-    config.model.hbdesigner.seq_nll_weight = 1.0
-    config.model.hbdesigner.net_res_nll_weight = 1.0
-
-    # Conditioning info
-    config.model.hbdesigner.guide_atom_pct = 0.5
-    config.model.hbdesigner.guide_atom_sigma = 4.0
-    config.model.hbdesigner.seq_cond_pct = 0.2
-    config.model.hbdesigner.seq_cond_unk_pct = 0.5
-
-    # Other model settings
-    config.model.hbdesigner.bb_noise = 0.02
-    config.model.model_name = "HBDesigner3"
-    config.model.hbdesigner.pack = False
-    config.model.hbdesigner.data_location = (
-        "/data/pdb_2021aug02/pdb_2021aug02_hbdesigner4/"
-    )
-
-    # Rescore/curation settings
-    config.model.hbdesigner.rescore = False
-    config.model.hbdesigner.rescore_filter = False
-
-    return config
-
-
-def build_hbdesigner_config_longleaf():
-    config: TrainConfig = init_empty(TrainConfig())
-    # config.log_dir = f"/users/d/i/dieckhau/dev/hbdes3_logs/{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
-    config.device = "cuda:0" if torch.cuda.is_available() else "cpu"
-    config.seed = 42
-
-    # Training settings
-    config.validate_every = 1_024
-    config.num_validation_batches = 128
-    config.checkpoint_every = 50_000
-    config.num_training_steps = 150_000
-    config.num_workers = 8
-    config.print_every = 16
-
-    # Loss and learning rate settings
-    config.opt.opt = "noam"
-    config.opt.adam_eps = 1e-9
-    config.opt.lr_decay = None
-    config.opt.noam_factor = 0.5
-
-    config.model.hbdesigner.batch_size = 10_000
-    config.model.hbdesigner.loss_type = "focal"
-    config.model.hbdesigner.focal_gamma = 2.0
-    config.model.hbdesigner.seq_nll_weight = 1.0
-    config.model.hbdesigner.net_res_nll_weight = 1.0
-
-    # Conditioning info
-    config.model.hbdesigner.guide_atom_pct = 0.5
-    config.model.hbdesigner.guide_atom_sigma = 4.0
-    config.model.hbdesigner.seq_cond_pct = 0.2
-    config.model.hbdesigner.seq_cond_unk_pct = 0.5
-
-    # Other model settings
-    config.model.hbdesigner.bb_noise = 0.02
-    config.model.model_name = "HBDesigner"
-    config.model.hbdesigner.data_location = (
-        "/work/users/d/i/dieckhau/pdb_2021aug02_hbdesigner4/"
-    )
-
-    return config
 
 CONFIGS = {
-    "resume": build_resume_config,
-    "hbdesigner_longleaf": build_hbdesigner_config_longleaf,
-    "hbdes3_pack_longleaf": build_hbdes3_pack_config_longleaf,
-    "hbdesigner_wout": build_hbdesigner_config_wout,
+    "hbpacker_longleaf": build_hbpacker_config_longleaf,
 }
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, default="hbdes3_longleaf")
+    parser.add_argument("--config", type=str, default="hbpacker_longleaf")
     parser.add_argument("--use_wandb", action="store_true")
     parser.add_argument("--resume_id", type=str, default="")
     parser.add_argument("--resume_ckpt", type=str, default=None)
@@ -1682,7 +1147,7 @@ if __name__ == "__main__":
     # Set up the trainer.
     config = CONFIGS[args.config]()
     seed_everything(config.seed)
-    trainer = HBDesignerTrainer(config)
+    trainer = HBPackerTrainer(config)
 
     # Load checkpoint if resuming
     if args.resume_ckpt:
@@ -1693,15 +1158,14 @@ if __name__ == "__main__":
     if args.use_wandb:
         wandb.login(key=os.environ["WANDB_API_KEY"])
         if not args.resume_id:
-            wandb.init(project="HBDesigner", config=OmegaConf.to_container(trainer.cfg))
+            wandb.init(project="HBPacker", config=OmegaConf.to_container(trainer.cfg))
         else:
             wandb.init(
-                project="HBDesigner",
+                project="HBPacker",
                 config=OmegaConf.to_container(trainer.cfg),
                 id=args.resume_id,
                 resume="must",
             )
 
-
-    # Fit HBDesigner
+    # Fit HBPacker
     trainer.fit()

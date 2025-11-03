@@ -3,7 +3,7 @@
 
 ### Preprocessing the training dataset
 
-1. Obtain the (ProteinMPNN training dataset)[https://github.com/dauparas/ProteinMPNN/tree/main/training]
+1. Obtain the [ProteinMPNN training dataset](https://github.com/dauparas/ProteinMPNN/tree/main/training)
 
 2. Generate assemblies and idealize sidechains
 ```
@@ -39,3 +39,13 @@ python extract_hbnet.py \
     --chunk_size 1000
 ```
 Each "chunk" can take up to a few hours to complete.
+
+### Training the sequence design and packing models
+
+```
+# Training can take up to 2 days to complete, depending on your GPU/CPU specs
+
+python train_hbdesigner.py --use_wandb
+python train_hbpacker.py --use_wandb
+
+```
