@@ -343,7 +343,7 @@ class HBPacker(nn.Module):
                 b.sc_dihedral[chi_mask] = sincos_to_angle(
                     results_dict["pred_chis_norm"]
                 )[chi_mask]  # [L, 4]
-                b.sc_dihedral = b.sc_dihedral_mask_gt * b.sc_dihedral
+                b.sc_dihedral = b.sc_dihedral_mask * b.sc_dihedral
 
         # Run the final iteration with gradients
         results_dict = self._forward(b)
@@ -868,36 +868,22 @@ class HBPacker(nn.Module):
         self,
         b: gd.Batch,
         n_recycles: int = 0,
-    ) -> Dict[str, torch.Tensor]:
-        """Currently used by Trainer.pack_batch in hbdes3 mode"""
+    ):
+        """Inference method for sidechain packing with recycles.
+        
+        Args:
+            b (gd.Batch): Input graph batch
+            n_recycles (int): Number of recycles to perform
 
-        # NOTE: do I need to zero these out?
-        # Override with native sequence for packing-only
-        b.net_res_num[:] = 0
-        seq = b.aatype
+        Returns:
+            gd.Batch: Updated graph batch with packed sidechains.
+        """
 
-        b.atom14_xyz[:, 4:] = 0.0
-        b.atom14_mask[:, 4:] = 0.0
-
-        # Zero out sc dihedral
-        b.sc_dihedral[:] = 0.0
-
-        bb_xyz = b.atom14_xyz[:, :4]
-        chi_angles_sincos = torch.stack(
-            [torch.sin(b.sc_dihedral), torch.cos(b.sc_dihedral)], dim=-1
-        ).view(-1, 4, 2)
-        xyz_sc, mask_sc = self.get_atom14_xyz_from_chi(seq, bb_xyz, chi_angles_sincos)
-        mask = b.chi_nll_mask.bool()
-
-        b.atom14_xyz[mask] = xyz_sc[mask]
-        b.atom14_mask[mask] = mask_sc[mask]
-        b.sc_dihedral_mask[mask] = self.chi_angles_mask[seq[mask]]
-
-        def get_processed_node_embeddings(b, seq):
+        def get_processed_node_embeddings(b):
             # Create initial embedding of protein nodes
             protein_nodes = self._form_protein_nodes(
                 b.bb_dihedral,
-                seq,
+                b.aatype,
                 b.sc_dihedral,
             )
 
@@ -914,7 +900,7 @@ class HBPacker(nn.Module):
             )
 
             # Pass through MPNN layers
-            for i, layer in enumerate(self.mpnn_layers):
+            for layer in self.mpnn_layers:
                 # Message passing
                 protein_nodes, protein_edges = layer(
                     protein_nodes, protein_edges, protein_edge_index
@@ -922,16 +908,15 @@ class HBPacker(nn.Module):
             return protein_nodes
 
         # Make predictions until model predicts each example is done.
-        for n_r in range(n_recycles + 1):
+        for _ in range(n_recycles + 1):
             protein_nodes = get_processed_node_embeddings(
                 b,
-                seq,
             )  # [L, pn_dim]
 
-            chi_res_to_pred_i = b.chi_nll_mask.bool()
+            chi_res_to_pred_i = b.chi_mask.bool()
 
             # Get chi predictions
-            seq_embed = self.seq_embedder(seq[chi_res_to_pred_i])
+            seq_embed = self.seq_embedder(b.aatype[chi_res_to_pred_i])
             protein_nodes_seq = torch.cat(
                 [protein_nodes[chi_res_to_pred_i], seq_embed], 1
             )
@@ -956,22 +941,7 @@ class HBPacker(nn.Module):
                 sincos_to_angle(chi_angles_sincos) * self.chi_angles_mask[aatype]
             )
 
-        # Create the results dictionary
-        results_dict = {}
-        for i in range(b.num_graphs):
-            seq_i = seq[b.aatype_batch == i]
-            seq_i_mask = seq_i != rc.restype_num
-            results_dict[i] = {
-                "net_res": torch.where(seq_i_mask)[0],
-                "seq": seq_i[seq_i_mask],
-            }
-
-        b.aatype = seq
-        b.atom14_xyz[(1 - b.chi_nll_mask).bool(), 4:] = 0.0
-        b.atom14_mask[(1 - b.chi_nll_mask).bool(), 4:] = 0.0
-        b.done_mask = b.chi_nll_mask
-
-        return b, results_dict
+        return b
 
 
 def load_HBPacker(

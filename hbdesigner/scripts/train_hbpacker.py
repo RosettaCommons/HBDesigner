@@ -107,8 +107,8 @@ class HBPackerDataset(HBDesignerDataset):
         chain_index = p.chain_index
 
         # Calculate ground truth chi dihedrals and their sin and cos.
-        sc_dihedral_gt, sc_dihedral_mask_gt = calc_sc_dihedrals(
-            atom14_xyz_gt[:, :14], aatype, return_mask=True
+        sc_dihedral_gt = calc_sc_dihedrals(
+            atom14_xyz_gt[:, :14], aatype, return_mask=False
         )
 
         chi_sincos_gt = np.stack(
@@ -160,11 +160,13 @@ class HBPackerDataset(HBDesignerDataset):
             residue_index=torch.from_numpy(residue_index).to(torch.int32),  # [L]
             chain_index=torch.from_numpy(chain_index).to(torch.int32),  # [L]
             bb_dihedral=torch.from_numpy(bb_dihedral).to(torch.float32),  # [L, 3]
+            # Zeroed out dihedrals prior to packing
             sc_dihedral=torch.from_numpy(sc_dihedral).to(torch.float32),  # [L, 4]
-            # Ground truth sidechain data
-            sc_dihedral_mask_gt=torch.from_numpy(sc_dihedral_mask_gt).to(
+            # Mask of dihedrals for each residue
+            sc_dihedral_mask=torch.from_numpy(sc_dihedral_mask).to(
                 torch.float32
             ),  # [L, 4]
+            # Sin/cos for ground truth dihedrals
             chi_sincos_gt=torch.from_numpy(chi_sincos_gt).to(
                 torch.float32
             ),  # [L, 4, 2]
@@ -676,13 +678,11 @@ class HBPackerTrainer(SupervisedTrainer):
                     mode="minimize-cart",
                 )
 
-        elif c.pack_method == "hbdes3":
-            self.pack_model.eval()
+        elif c.pack_method == "hbpacker":
+            self.model.eval()
             t0 = time.time()
-            b.sc_dihedral_mask = b.sc_dihedral_mask_gt
-            b.aatype[b.aatype == rc.restype_order["G"]] = rc.restype_num
-            b.chi_nll_mask = (b.aatype != rc.restype_num).to(torch.long)
-            b, results = self.pack_model.run_pack_recyc(
+
+            b = self.model.run_pack_recyc(
                 b.to(self.cfg.device), c.num_recycles
             )
             non_net = b.aatype == 20
@@ -839,7 +839,7 @@ class HBPackerTrainer(SupervisedTrainer):
 
         # Collect relevant chi mask
         mask = b.chi_mask.bool()
-        chi_mask = b.sc_dihedral_mask_gt[mask]
+        chi_mask = b.sc_dihedral_mask[mask]
         dev = next(self.model.parameters()).device
 
         # Compute metrics on GPU so we can use model convenience methods
