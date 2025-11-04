@@ -2,7 +2,7 @@ from copy import deepcopy
 from functools import partial
 from multiprocessing import Pool
 from typing import Dict, List, Sequence, Tuple, Optional
-
+import os
 import numpy as np
 import pyrosetta
 import time
@@ -31,8 +31,8 @@ import hbdesigner.data.residue_constants as rc
 from hbdesigner.data.features import impute_CB
 from hbdesigner.data.protein import Protein
 
-REDUCE_EXE = "/spshared/apps/reduce/reduce_src/reduce"
-HET_DICT = "/spshared/apps/reduce/reduce_wwPDB_het_dict.txt"
+REDUCE_EXE=os.path.join(os.path.dirname(os.path.dirname(__file__)), "reduce/reduce_src/reduce")
+HET_DICT = os.path.join(os.path.dirname(os.path.dirname(__file__)), "reduce/reduce_wwPDB_het_dict.txt")
 
 
 def batch_to_proteins(batch: gd.Batch) -> Tuple[List[Protein], List[gd.Data]]:
