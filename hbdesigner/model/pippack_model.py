@@ -1678,23 +1678,23 @@ class PIPPackFineTune(PIPPack):
 
 
 def load_PIPPack(cfg: ModelConfig) -> Optional[PIPPackFineTune]:
-    c = cfg.frankenpacker
+    c = cfg.pippack
 
-    if c.pippack_ckpt != "":
+    if c.ckpt != "":
         sidechain_model = PIPPackFineTune(
-            use_ipmp=c.pippack_use_ipmp,
-            n_points=c.pippack_n_points,
-            recycle_SC_D_sc=c.pippack_recycle_SC_D_sc,
-            mask_distances=c.pippack_mask_distances,
+            use_ipmp=c.use_ipmp,
+            n_points=c.n_points,
+            recycle_SC_D_sc=c.recycle_SC_D_sc,
+            mask_distances=c.mask_distances,
             dropout=0.0,
         )
-        ckpt = torch.load(c.pippack_ckpt, map_location="cpu")
+        ckpt = torch.load(c.ckpt, map_location="cpu")
         sidechain_model.load_state_dict(ckpt["model_state_dict"])
     else:
         raise ValueError("No PIPPack checkpoint specified!")
 
     # PIPPack can be run on CPU or GPU depending on memory needs
-    sidechain_model.to(c.pippack_device)
+    sidechain_model.to(c.device)
     return sidechain_model
 
 
@@ -1815,38 +1815,19 @@ def apply_logits_to_proteins(
     # Outer loop is over individual objects (batch dim)
     for obj_idx in range(len(proteins)):
         current_protein = proteins[obj_idx]
-        # If graph not in use, repack the whole thing
-        graph = current_protein.graph
-        if len(graph) > 0:
-            res_idx = [r for r in graph.nodes]
-        else:
-            # Don't apply PIPPack's logits to A, G, or X
-            res_sel = np.logical_and(
-                current_protein.aatype != rc.restype_order["A"],
-                current_protein.aatype != rc.restype_order["G"],
-            )
-            res_sel = np.logical_and(res_sel, current_protein.aatype != rc.restype_num)
-            res_idx = np.where(res_sel)[0]
+        # Don't apply PIPPack's logits to A, G, or X
+        res_sel = np.logical_and(
+            current_protein.aatype != rc.restype_order["A"],
+            current_protein.aatype != rc.restype_order["G"],
+        )
+        res_sel = np.logical_and(res_sel, current_protein.aatype != rc.restype_num)
+        res_idx = np.where(res_sel)[0]
 
         # Grab xyz and aatype from scaffold
         bb_xyz = current_protein.atom27_xyz[res_idx, :4, :]
         aatype = current_protein.aatype[res_idx]
 
-        # Get cur_logits [L, 4, nchi + 1], but maybe adjust L
-        if "full_components" in dir(current_protein):
-            # If full_components is present, this is a cropped protein.
-            # We need to remap the full logits to a cropped version.
-            crop_mask = torch.from_numpy(
-                np.array(
-                    [
-                        i in current_protein.residue_index
-                        for i in current_protein.full_components["residue_index"]
-                    ]
-                )
-            )
-            cur_logits = logits[obj_idx][: crop_mask.shape[0]][crop_mask]
-        else:
-            cur_logits = logits[obj_idx]
+        cur_logits = logits[obj_idx]
 
         # Get chi angles from cur_logits [L, 4, nchi + 1]
         chi_logits = cur_logits[res_idx, :, :nchi]  # [4, nchi]
@@ -1895,14 +1876,7 @@ def apply_logits_to_proteins(
             current_protein.atom27_xyz[:, :14] = resample_xyz.cpu().numpy()
             chi_angles = chi_angles.cpu().numpy()
 
-        # Update nodes to contain new res side chain info
-        if len(graph) > 0:
-            for i, r in enumerate(res_idx):
-                graph.nodes[r]["chi_angles"] = chi_angles[i] * chi_angle_mask[i]
-                graph.nodes[r]["chi_angle_mask"] = chi_angle_mask[i]
-
         proteins[obj_idx] = current_protein
-        proteins[obj_idx].graph = graph
 
     return proteins
 

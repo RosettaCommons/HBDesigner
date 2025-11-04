@@ -240,9 +240,6 @@ def rosetta_hbond_detect(
     hbondset = pose.get_hbonds(exclude_bb=True, exclude_bsc=True, exclude_scb=True)
     hbonds = hbondset.hbonds()
 
-    # TODO remove
-    pose.dump_pdb("ROSETTA.pdb")
-
     # Collect HBonds
     for bond in hbonds:
         # Convert from Pose to Protein numbering
@@ -500,7 +497,11 @@ def minimize_task(p: Protein, cartesian: bool = True) -> Protein:
     ros_p = Protein.from_pdb_string(pdb_block, discard_Hs=False, from_rosetta=True)
     t1 = time.time()
     ros_p = ros_p.pad(n=p.n_res)
-    ros_p.pack_time = p.pack_time + (t1 - t0)
+
+    if hasattr(p, "pack_time"):
+        ros_p.pack_time = p.pack_time + (t1 - t0)
+    else:
+        ros_p.pack_time = t1 - t0
     return ros_p
 
 

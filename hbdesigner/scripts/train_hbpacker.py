@@ -14,7 +14,6 @@ import wandb
 from omegaconf import OmegaConf
 from scipy.spatial.distance import cdist
 
-
 import hbdesigner.data.residue_constants as rc
 from hbdesigner.data.features import (
     calc_bb_dihedrals,
@@ -27,7 +26,6 @@ from hbdesigner.data.hbnet import (
     batch_to_proteins,
     pack_with_rosetta,
     rosetta_hbond_detect,
-    calc_seq_rec_batched,
     clear_non_network_res,
     crop_by_distance,
 )
@@ -37,7 +35,6 @@ from hbdesigner.model.pippack_model import (
     load_PIPPack,
 )
 from hbdesigner.data.protein import Protein
-from hbdesigner.scripts.preprocess_asmbs import load_metadata
 from hbdesigner.train.config import TrainConfig
 from hbdesigner.train.trainer import SupervisedTrainer
 from hbdesigner.utils import cycle, seed_everything, worker_init, init_empty
@@ -419,10 +416,10 @@ class HBPackerTrainer(SupervisedTrainer):
         if c.pack_method == "pippack":
             print(f"Loading PIPPack ({c.pack_mode})!")
             if c.pack_mode == "fast":
-                self.cfg.model.frankenpacker.pippack_recycles = 1
+                self.cfg.model.pippack.recycles = 1
                 pippack_models = 3
             else:
-                self.cfg.model.frankenpacker.pippack_recycles = 3
+                self.cfg.model.pippack.recycles = 3
                 pippack_models = 3
             self.load_pippack(n_models=pippack_models)
 
@@ -440,9 +437,9 @@ class HBPackerTrainer(SupervisedTrainer):
         self.pippack = []
         models = ["1", "2", "3"][:n_models]
         for m in models:
-            ckpt = self.cfg.model.frankenpacker.pippack_ckpt
+            ckpt = self.cfg.model.pippack.ckpt
             ckpt = "_".join(ckpt.split("_")[:-2]) + f"_{m}_ckpt.pt"
-            self.cfg.model.frankenpacker.pippack_ckpt = ckpt
+            self.cfg.model.pippack.ckpt = ckpt
             mod = load_PIPPack(self.cfg.model)
             mod.eval()
             self.pippack.append(mod)
@@ -510,105 +507,40 @@ class HBPackerTrainer(SupervisedTrainer):
     def test_batch(
         self,
         b: gd.Batch,
-        design: bool = True,
-        pack: bool = True,
-        seq_sample_temp: float = 0.1,
-        res_sample_temp: float = 0.1,
         n_workers: int = 1,
     ) -> Dict[str, Any]:
         """
-        Sample, pack, and score a Batch of Proteins using HBNet metrics.
+        Pack and score a Batch of Proteins using HBDesigner metrics.
         Called by self.test_loop()
 
         Arguments:
             b (gd.Batch): Batch of proteins to be scored.
-            design (bool): Whether to design with HBDes3. Default is True. If False, native seq is used.
-            pack (bool): Whether to pack sidechains. Default is True. If False, ???.
-            seq_sample_temp (float): Sampling temperature for restype decoding. Defaults to 0.1.
-            res_sample_temp (float): Sampling temperature for network position decoding. Defaults to 0.1.
-            n_workers (int): Number of workers for Rosetta parallel packing. Defaults to 1.
+            n_workers (int): Number of workers for Rosetta parallel packing, if using. Defaults to 1.
 
         Returns:
             info (Dict[str, any]): Set of metrics for the batch.
         """
         test_info = {}
 
-        # 1. Design seq, or collect native seq
-        if design:
-            native_seq = deepcopy(b.aatype_gt)
-            native_pos = native_seq != rc.restype_num
-            aatype_batch = b.aatype_batch.clone()
-            # done_before = b.done_mask.clone() # TODO drop, partial network recovery
-            b, results = self.sample_batch(
-                b,
-                seq_sample_temp=seq_sample_temp,
-                res_sample_temp=res_sample_temp,
-            )
-            pred_seq = b.aatype.clone().to(native_seq.device)
-            pred_seq[pred_seq == rc.restype_order["G"]] = rc.restype_num
-            pred_pos = pred_seq != rc.restype_num
-
-            # TODO drop, partial network recovery
-            # mask = (done_before > 0).cpu()
-            # native_pos = native_pos[~mask]
-            # native_seq = native_seq[~mask]
-            # pred_pos = pred_pos[~mask]
-            # pred_seq = pred_seq[~mask]
-            # aatype_batch = aatype_batch[~mask]
-
-            # Calculate pos/seq recovery metrics
-            pos_rec, seq_rec = calc_seq_rec_batched(
-                pred_pos, native_pos, pred_seq, native_seq, aatype_batch
-            )
-            test_info["pos_rec"] = pos_rec.tolist()
-            test_info["seq_rec"] = seq_rec.tolist()
-
-            # Collect avg prob/log-prob of positions
-            net_res_probs = []
-            seq_probs = []
-            for i in range(b.num_graphs):
-                net_res_probs.append(np.mean(results[i]["net_res_probs"].tolist()))
-                seq_probs.append(np.mean(results[i]["seq_probs"].tolist()))
-            test_info["net_res_probs"] = net_res_probs
-            test_info["seq_probs"] = seq_probs
-
-        else:
-            # Override preds with native seq
-            b.aatype = b.aatype_gt
-            b.nll_mask = b.nll_mask + b.done_mask
-
-        # 2. Pack sidechains, if enabled
+        # Do specified pack
         proteins, b_list, runtimes = self.pack_batch(b, n_workers)
         test_info["pack_time"] = runtimes
 
-        # 3. Loop over each generated protein and score it
+        # Loop over each generated protein and score it
         for b_c, p in zip(b_list, proteins):
             if p is None:
                 continue
 
-            # Calculate packing scores, only if running packing eval
-            if (not design) and pack:
-                pack_info = self.compute_packing_metrics(p, b_c)
-                # Collect packing metrics
-                for key, value in pack_info.items():
-                    x = value.cpu().tolist()
-                    if key not in test_info.keys():
-                        test_info[key] = x
-                    else:
-                        test_info[key].extend(x)
+            # Compute packing metrics (RMSD, MAE, Rotamer Recovery)
+            pack_info = self.compute_packing_metrics(p, b_c)
+            for key, value in pack_info.items():
+                x = value.cpu().tolist()
+                if key not in test_info.keys():
+                    test_info[key] = x
+                else:
+                    test_info[key].extend(x)
 
-            # Add ghost atom to Protein for scoring + vis
-            ghost_atom_xyz = b_c.guide_atom_xyz.numpy()
-            p.hetatm_dict = {
-                "atom_name": np.array(["V1"]),
-                "element": np.array(["V"]),
-                "res_name": np.array(["ORI"]),
-                "residue_index": np.array([p.residue_index.max() + 1]),
-                "chain_index": np.array([p.chain_index.max() + 1]),
-                "atom_xyz": ghost_atom_xyz,
-            }
-
-            # In all cases, score packed networks
+            # Compute HBDesigner metrics (Energy, Saturation, Network Recovery)
             score_info = self.score_protein(p)
 
             # Add network scoring data to test_info
@@ -624,10 +556,6 @@ class HBPackerTrainer(SupervisedTrainer):
     def test_loop(
         self,
         dataloader: DataLoader,
-        design: bool = True,
-        pack: bool = True,
-        seq_sample_temp: float = 0.1,
-        res_sample_temp: float = 0.1,
         steps: Optional[int] = None,
         n_workers: int = 1,
         dump: bool = False,
@@ -636,15 +564,11 @@ class HBPackerTrainer(SupervisedTrainer):
     ) -> Dict[str, any]:
         """
         Run test loop on the specified DataLoader.
-        This uses test_batch, which packs and scores each (predicted) network.
-        This is different from SupervisedTrainer.validation_loop(), which only calculates loss.
+        This uses test_batch, which packs and scores each network.
+        This is different from SupervisedTrainer.validation_loop(), which only calculates loss terms.
 
         Args:
             dataloader (DataLoader): DataLoader of gd.Batch objects to test on.
-            design (bool): Whether to design a new network instead of using the native. Defaults to True.
-            pack (bool): Whether to pack the sequence instead of using native sidechains. Defaults to True.
-            seq_sample_temp (float): Sampling temperature for seq (aatype) decoding.
-            res_sample_temp (float): Sampling temperature for res (position/stop action) decoding.
             steps (optional, int): Steps of testing to do. If None, will run whole dataset.
             n_workers (int): Number of workers available for Rosetta packing job. Defaults to 1.
             dump (bool): Whether to dump the packed PDBs after scoring. Defaults to False.
@@ -659,10 +583,6 @@ class HBPackerTrainer(SupervisedTrainer):
         for i, batch in zip(range(steps), cycle(dataloader)):
             batch_info, proteins = self.test_batch(
                 batch,
-                design=design,
-                pack=pack,
-                seq_sample_temp=seq_sample_temp,
-                res_sample_temp=res_sample_temp,
                 n_workers=n_workers,
             )
             # Save PDBs to disk, if requested
@@ -718,13 +638,12 @@ class HBPackerTrainer(SupervisedTrainer):
         Returns:
             Sequence[Protein]: List of packed proteins.
         """
-        c = self.cfg.model.hbdesigner
+        c = self.cfg.model.hbpacker
         b = b.to("cpu")
+        # This will score the native sidechains
         if c.pack_method == "native":
-            # Override w/native coords
             b.atom14_xyz = b.atom14_xyz_gt
             b.atom14_mask = b.atom14_mask_gt
-            b.aatype = b.aatype_gt
             proteins, b_list = batch_to_proteins(b)
 
             if c.pack_min:
@@ -733,14 +652,6 @@ class HBPackerTrainer(SupervisedTrainer):
                     n_workers=n_workers,
                     mode="minimize-cart",
                 )
-            else:
-                proteins = pack_with_rosetta(
-                    proteins,
-                    n_workers=n_workers,
-                    # mode="pdb2pqr",
-                    mode="reduce",
-                )
-                print("ran reduce/hydride/pdb2pqr!")
 
         elif c.pack_method == "rosetta":
             proteins, b_list = batch_to_proteins(b)
@@ -762,7 +673,7 @@ class HBPackerTrainer(SupervisedTrainer):
                 proteins = pack_with_rosetta(
                     proteins,
                     n_workers=n_workers,
-                    mode="minimize",
+                    mode="minimize-cart",
                 )
 
         elif c.pack_method == "hbdes3":
@@ -799,10 +710,10 @@ class HBPackerTrainer(SupervisedTrainer):
                 print("ran reduce/hydride!")
 
         elif c.pack_method == "pippack":
-            # Using Frankenpacker PIPPack configuration
+
             t0 = time.time()
             proteins, b_list = batch_to_proteins(b)
-            proteins = self.pack_with_pippack(proteins, b_list)
+            proteins = self.pack_with_pippack(proteins)
             t1 = time.time()
             rtime = (t1 - t0) / b.num_graphs
             for p in proteins:
@@ -839,18 +750,9 @@ class HBPackerTrainer(SupervisedTrainer):
         bond_list, rosetta_stats = rosetta_hbond_detect(
             p,
             max_energy=0.0,
-            optH=True,  # True
+            optH=True,
             optH_MCA=False,
         )
-        print("bond list rosetta:", bond_list, "***")
-
-        # bond_list, rosetta_stats = biotite_hbond_detect(
-        #     p,
-        # )
-        # print("bond list biotite:", bond_list, '***')
-
-        # Save guide atom before cropping
-        guide_atom_xyz = np.copy(p.hetatm_dict["atom_xyz"])
 
         # Drop ghost residues, which can affect chain counting
         res_mask = np.prod(p.atom27_mask[:, :4], axis=-1)
@@ -887,13 +789,6 @@ class HBPackerTrainer(SupervisedTrainer):
         vmask = np.sum(p.aatype == valid_res[:, None], axis=0) > 0
         valid_res_frac = np.sum(vmask) / total_res
 
-        # Calculate network displacement vs guide atom
-        xyz_Cb = impute_CB(
-            p.atom27_xyz[:, 0, :], p.atom27_xyz[:, 1, :], p.atom27_xyz[:, 2, :]
-        )  # [N, 3]
-        xyz_centroid = np.mean(xyz_Cb, axis=0)  # [3]
-        displacement = np.linalg.norm(guide_atom_xyz - xyz_centroid)
-
         # Check if all residues are h-bonding
         pass_relaxed = hbond_res == total_res
         # Check if network has only one connected component
@@ -913,7 +808,6 @@ class HBPackerTrainer(SupervisedTrainer):
             "total_res": total_res,
             "max_Cb_dist": max_Cb_dist,
             "valid_res_frac": valid_res_frac,
-            "displacement": displacement,
         }
         score_info.update(rosetta_stats)
 
@@ -925,6 +819,15 @@ class HBPackerTrainer(SupervisedTrainer):
         return score_info
 
     def compute_packing_metrics(self, p: Protein, b: gd.Data) -> Dict[str, Any]:
+        """Given a packed Protein and its corresponding batch data, compute packing metrics.
+
+        Args:
+            p (Protein): Packed Protein object.
+            b (gd.Data): Corresponding batch data used for packing.
+        
+        Returns:
+            Dict[str, Any]: Dictionary of packing metrics.
+        """
         pack_info = {}
         # Collect true and pred chi values
         true_chi_rad = sincos_to_angle(b.chi_sincos_gt)
@@ -935,14 +838,14 @@ class HBPackerTrainer(SupervisedTrainer):
         )
 
         # Collect relevant chi mask
-        mask = (b.nll_mask + b.done_mask).bool()
+        mask = b.chi_mask.bool()
         chi_mask = b.sc_dihedral_mask_gt[mask]
         dev = next(self.model.parameters()).device
 
         # Compute metrics on GPU so we can use model convenience methods
         chi_ae = self.model.compute_chi_ae(
             pred_chi_rad=pred_chi_rad.to(dev).to(torch.float32),
-            aatype=b.aatype_gt[mask].to(dev).to(torch.long),
+            aatype=b.aatype[mask].to(dev).to(torch.long),
             chi_mask=chi_mask.to(dev).to(torch.float32),
             true_chi_rad=true_chi_rad[mask].to(dev).to(torch.float32),
         )
@@ -960,11 +863,11 @@ class HBPackerTrainer(SupervisedTrainer):
         b.atom14_xyz[mask] = pred_coords.to(b.x.device)
 
         pack_info["sc_rmsd"] = (
-            self.pack_model.compute_sc_msd(
+            self.model.compute_sc_msd(
                 b.atom14_xyz[mask],
                 b.atom14_xyz_gt[mask],
                 b.atom14_mask_gt[mask],
-                b.aatype_gt[mask],
+                b.aatype[mask],
             )
             .sqrt()
             .cpu()
@@ -979,7 +882,6 @@ class HBPackerTrainer(SupervisedTrainer):
     def pack_with_pippack(
         self,
         proteins: Sequence[Protein],
-        b_list: Sequence[gd.Data],
     ) -> Sequence[Protein]:
         """
         Pack a full Protein object.
@@ -1001,9 +903,6 @@ class HBPackerTrainer(SupervisedTrainer):
             p.aatype[p.aatype == rc.restype_num] = rc.restype_order["G"]
             p.clear_sidechains()
             p_b = self.test_data.featurize(p, p.aatype)
-            p_b["aatype"] = p_b["aatype_gt"]
-            p_b["nll_mask"] = p_b["nll_mask"] + p_b["done_mask"]
-            p_b["chi_nll_mask"] = p_b["nll_mask"]
 
             # PolyALA backbone works best
             p_b["aatype"][p_b["aatype"] == rc.restype_num] = rc.restype_order["A"]
@@ -1043,8 +942,8 @@ class HBPackerTrainer(SupervisedTrainer):
             logits = (
                 get_sidechain_logits(
                     m,
-                    p_batch.to(self.cfg.model.frankenpacker.pippack_device),
-                    recycles=self.cfg.model.frankenpacker.pippack_recycles,
+                    p_batch.to(self.cfg.model.pippack.device),
+                    recycles=self.cfg.model.pippack.recycles,
                 )
                 .detach()
                 .cpu()
@@ -1054,7 +953,7 @@ class HBPackerTrainer(SupervisedTrainer):
         # Stack and avg logits from ensemble
         logits = torch.mean(torch.stack(all_logits, dim=-1), dim=-1)
         proteins = apply_logits_to_proteins(
-            proteins, logits, resample=self.cfg.model.frankenpacker.pippack_resampling
+            proteins, logits, resample=self.cfg.model.pippack.resampling
         )
         for p in proteins:
             p.aatype[p.aatype == rc.restype_order["A"]] = rc.restype_order["G"]
@@ -1091,7 +990,7 @@ def build_hbpacker_config_longleaf():
     config.validate_every = 1_024
     config.num_validation_batches = 128
     config.checkpoint_every = 50_000
-    config.num_training_steps = 50_000
+    config.num_training_steps = 200_000
     config.num_workers = 16
     config.print_every = 16
 

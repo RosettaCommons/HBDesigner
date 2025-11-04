@@ -14,7 +14,13 @@ from hbdesigner.data.features import Array
 
 from dataclasses import fields, is_dataclass
 from typing import Optional
-from omegaconf import MISSING
+from omegaconf import MISSING, OmegaConf
+
+
+def get_config_from_file(filename: str) -> OmegaConf:
+    """Load a config from a yaml file."""
+    assert os.path.isfile(filename), f"Invalid config file {filename} specified."
+    return OmegaConf.load(filename)
 
 
 class StrictDataClass:

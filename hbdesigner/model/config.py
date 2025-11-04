@@ -143,89 +143,34 @@ class HBDesignerModelConfig(StrictDataClass):
 
 
 @dataclass
-class FrankenPackerModelConfig(StrictDataClass):
-    """FrankenPacker model configuration.
+class PIPPackModelConfig(StrictDataClass):
+    """PIPPack model configuration.
 
     Attributes:
-        pippack_ckpt (str): Path to the PIPPack checkpoint to use. Defaults to "".
-        pippack_use_ipmp (bool): Whether to use IPMP or MPNN layers in PIPPack.
+        ckpt (str): Path to the PIPPack checkpoint to use. Defaults to "".
+        use_ipmp (bool): Whether to use IPMP or MPNN layers in PIPPack.
             Defaults to True.
-        pippack_n_points (int): Number of invariant points to use in IPMP in PIPPack.
+        n_points (int): Number of invariant points to use in IPMP in PIPPack.
             Defaults to 8.
-        pippack_recycle_SC_D_sc (bool): Enables recycling predicted sidechain
+        recycle_SC_D_sc (bool): Enables recycling predicted sidechain
             dihedral information as sin/cos encoding in PIPPack. Defaults to True.
-        pippack_mask_distances (bool): Enables masking of distances of atoms that may
+        mask_distances (bool): Enables masking of distances of atoms that may
             be nonexistant. Defaults to True.
-        pippack_device (str): Which device to use for PIPPack hosting. Defaults to "cuda".
-        pippack_recycles (int): How many recycles to run for PIPPack. Defaults to 0.
-        pippack_resampling (bool): Whether to use PIPPack resampling for postprocessing. Defaults to False.
-        ligandmpnn_ckpt (str): Path to the LigandMPNN checkpoint to use. Defaults to "".
-        ligandmpnn_k_neighbors (int): Number of neighbors for each residue in
-            LigandMPNN. Defaults to 32.
-        ligandmpnn_atom_context_num (int): Number of atoms to use as ligand context in
-            LigandMPNN. Defaults to 25.
-        ligandmpnn_model_type (str): Which model type to use for ProteinMPNN class.
-            Defaults to "ligand_mpnn".
-        ligandmpnn_use_side_chain_context (bool): Whether to use side chain atoms as
-            ligand context in LigandMPNN. Defaults to True.
-        no_scaling (bool): Disables the scale module and uses a scale of 1.0. Defaults
-            to False.
-        pn_dim (int): Hidden dimension size for protein nodes. Defaults to 128.
-        pe_dim (int): Hidden dimension size for protein edges. Defaults to 128.
-        pg_dim (int): Hidden dimension size for protein graph nodes. Defaults to 256.
-        knn_k (int): Number of nearest neighbors to use in protein graph. Defaults to 30.
-        max_seq_sep (int): Maximum separation in sequence space for positional
-            encodings. Defaults to 32.
-        num_rbf (int): Number of RBF encodings to use. Defaults to 16.
-        num_mpnn_layers (int): Number of MPNN layers. Defaults to 3.
-        num_mlp_layers (int): Number of MLP layers. Defaults to 3.
-        num_ipmp_points (int): Number of invariant points to use in IPMP. Defaults to 8.
-
-        logZ_* (Union[str, int]): Hyperparameters associated with the logZ parameter.
-            See descriptions above.
+        device (str): Which device to use for PIPPack hosting. Defaults to "cuda".
+        recycles (int): How many recycles to run for PIPPack. Defaults to 0.
+        resampling (bool): Whether to use PIPPack resampling for postprocessing. Defaults to False.
     """
 
     # PIPPack model parameters
     # These are non-default values from pippack_model_1_config.pickle
-    pippack_ckpt: str = ""
-    pippack_use_ipmp: bool = True
-    pippack_n_points: int = 8
-    pippack_recycle_SC_D_sc: bool = True
-    pippack_mask_distances: bool = True
-    pippack_device: str = "cuda"
-    pippack_recycles: int = 0
-    pippack_resampling: bool = False
-
-    # LigandMPNN model parameters
-    # These are non-default values from ligandmpnn_v_32_010_25.pt
-    ligandmpnn_ckpt: str = ""
-    ligandmpnn_k_neighbors: int = 32
-    ligandmpnn_atom_context_num: int = 25
-    ligandmpnn_model_type: str = "ligand_mpnn"
-    ligandmpnn_use_side_chain_context: bool = True
-
-    # Scale module parameters
-    no_scaling: bool = False
-    pn_dim: int = 128
-    pe_dim: int = 128
-    pg_dim: int = 256
-    knn_k: int = 30
-    max_seq_sep: int = 32
-    num_rbf: int = 16
-    num_mpnn_layers: int = 3
-    num_mlp_layers: int = 3
-    num_ipmp_points: int = 8
-
-    # LogZ parameters
-    logZ_pn_dim: int = 64
-    logZ_pe_dim: int = 64
-    logZ_pg_dim: int = 128
-    logZ_knn_k: int = 30
-    logZ_max_seq_sep: int = 32
-    logZ_num_rbf: int = 16
-    logZ_num_mpnn_layers: int = 3
-    logZ_num_mlp_layers: int = 3
-    logZ_num_ipmp_points: int = 8
+    ckpt: str = ""
+    use_ipmp: bool = True
+    n_points: int = 8
+    recycle_SC_D_sc: bool = True
+    mask_distances: bool = True
+    device: str = "cuda"
+    recycles: int = 0
+    resampling: bool = False
 
 
 @dataclass
@@ -241,8 +186,8 @@ class ModelConfig(StrictDataClass):
 
     model_name: str = "Uniform"
     dropout: float = 0.1
-    frankenpacker: FrankenPackerModelConfig = field(
-        default_factory=FrankenPackerModelConfig
+    pippack: PIPPackModelConfig = field(
+        default_factory=PIPPackModelConfig
     )
     hbdesigner: HBDesignerModelConfig = field(default_factory=HBDesignerModelConfig)
     hbpacker: HBPackerModelConfig = field(default_factory=HBPackerModelConfig)
