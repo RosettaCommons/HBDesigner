@@ -11,8 +11,9 @@ from hbdesigner.utils import seed_everything, get_config_from_file
 
 
 if __name__ == "__main__":
-
-    parser = argparse.ArgumentParser("Evaluation script for HBPacker and other packing methods.")
+    parser = argparse.ArgumentParser(
+        "Evaluation script for HBPacker and other packing methods."
+    )
     parser.add_argument(
         "--pack_config",
         type=str,
@@ -68,16 +69,16 @@ if __name__ == "__main__":
         help="Whether to minimize after packing. Defaults to False.",
     )
     parser.add_argument(
-        "--first_n", 
-        type=int, 
+        "--first_n",
+        type=int,
         default=None,
-        help="Collect and score the first N samples for benchmarking. Off by default. Overrides --n_batches if enabled."
+        help="Collect and score the first N samples for benchmarking. Off by default. Overrides --n_batches if enabled.",
     )
     parser.add_argument(
-        "--repeats", 
-        type=int, 
+        "--repeats",
+        type=int,
         default=1,
-        help="Number of repeats for error bars. Defaults to 1."
+        help="Number of repeats for error bars. Defaults to 1.",
     )
     args = parser.parse_args()
     print("Args:", args)
@@ -115,7 +116,12 @@ if __name__ == "__main__":
     if args.first_n is not None:
         steps = None
 
-    print(config.model.hbpacker.pack_method, '***', config.model.hbpacker.pack_mode, config.model.hbpacker.pack_min)
+    print(
+        config.model.hbpacker.pack_method,
+        "***",
+        config.model.hbpacker.pack_mode,
+        config.model.hbpacker.pack_min,
+    )
     trainer = HBPackerTrainer(config, print_config=False)
     trainer.load_model_state(args.pack_ckpt)
     initialize_rosetta(args.pack_mode)
@@ -140,7 +146,6 @@ if __name__ == "__main__":
         t1 = time.time()
         elapsed = round(t1 - t0)
         for key, value in info.items():
-
             if key not in repeat_info:
                 repeat_info[key] = [value]
             else:

@@ -1,12 +1,12 @@
 import argparse
-import time
-import numpy as np
 import os
+import time
+
+import numpy as np
 from hbdesigner.data.hbnet import initialize_rosetta
 from hbdesigner.scripts.train_hbdesigner import HBDesignerTrainer
 from hbdesigner.scripts.train_hbpacker import HBPackerTrainer
-from hbdesigner.utils import seed_everything, get_config_from_file
-
+from hbdesigner.utils import get_config_from_file, seed_everything
 
 if __name__ == "__main__":
     # This script is meant to gather validation metrics from the FULL test set for HBDesigner.
@@ -90,16 +90,16 @@ if __name__ == "__main__":
         help="Whether to minimize for packing. Defaults to False.",
     )
     parser.add_argument(
-        "--first_n", 
-        type=int, 
+        "--first_n",
+        type=int,
         default=None,
-        help="Collect and score the first N samples for benchmarking. Off by default. Overrides --n_batches if enabled."
+        help="Collect and score the first N samples for benchmarking. Off by default. Overrides --n_batches if enabled.",
     )
     parser.add_argument(
-        "--repeats", 
-        type=int, 
+        "--repeats",
+        type=int,
         default=1,
-        help="Number of repeats for error bars. Defaults to 1."
+        help="Number of repeats for error bars. Defaults to 1.",
     )
     args = parser.parse_args()
     print("Args:", args)
@@ -136,7 +136,7 @@ if __name__ == "__main__":
     if args.first_n is not None:
         steps = None
 
-    print(args.seq_temp, '***', args.pos_temp)
+    print(args.seq_temp, "***", args.pos_temp)
     design_trainer = HBDesignerTrainer(design_config, print_config=False)
     design_trainer.load_model_state(args.design_ckpt)
 
@@ -169,8 +169,6 @@ if __name__ == "__main__":
     initialize_rosetta(args.pack_mode)
 
     # 3. Run design/packing loop
-
-    # Enable repeated runs for errorbars
     repeat_info = {}
     seeds = [1234, 1111, 42, 10124, 4529]
     for r in range(args.repeats):
@@ -194,7 +192,6 @@ if __name__ == "__main__":
         t1 = time.time()
         elapsed = round(t1 - t0)
         for key, value in info.items():
-
             if key not in repeat_info:
                 repeat_info[key] = [value]
             else:

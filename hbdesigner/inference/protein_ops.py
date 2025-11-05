@@ -138,11 +138,11 @@ def concat_proteins(p_all: List[Protein], sort: bool = True) -> Protein:
 def get_network_res(p: Protein, non_net: str = "G") -> str:
     """
     Detects any non-GLY res in the protein and collects their PDB chain and res IDs.
-    
+
     Arguments:
         p (Protein): The Protein object to get the network residues from.
         non_net (str): The residue type to exclude from the network. Defaults to "G" (glycine).
-    
+
     Returns:
         str: A colon-separated string representation of the network residues.
     """
@@ -168,7 +168,7 @@ def add_guide_atom(p: Protein, guide_atom_xyz: np.ndarray) -> Protein:
     Arguments:
         p (Protein): The Protein object to which the guide atom will be added.
         guide_atom_xyz (np.ndarray): The XYZ coordinates of the guide atom, shape [3,].
-    
+
     Returns:
         Protein: The updated Protein object.
     """
@@ -228,7 +228,7 @@ def validate_guide_res(p: Protein, guide_res: str = None) -> Union[np.ndarray, N
         )[0]
         if matches.size != 1:
             raise ValueError(
-                "Parsing error! {matches.size} matches found for res {res}."
+                f"Parsing error! {matches.size} matches found for res {res}."
             )
         abs_res.append(matches[0])
 

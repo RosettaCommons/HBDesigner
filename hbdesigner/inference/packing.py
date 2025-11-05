@@ -1,11 +1,16 @@
-from typing import Any, Dict, List
 from copy import deepcopy
+from typing import Any, Dict, List
+
+import hbdesigner.data.residue_constants as rc
 import networkx as nx
 import numpy as np
 import pyrosetta
 import torch_geometric.data as gd
-
+from hbdesigner.data.hbnet import crop_by_distance, get_satisfaction
+from hbdesigner.data.protein import Protein
+from hbdesigner.inference.protein_ops import get_network_res
 from pyrosetta import Pose, get_fa_scorefxn
+from pyrosetta.rosetta.basic.options import get_real_option, set_real_option
 from pyrosetta.rosetta.core.import_pose import pose_from_pdbstring
 from pyrosetta.rosetta.core.kinematics import MoveMap
 from pyrosetta.rosetta.core.pack.task import TaskFactory, operation
@@ -25,12 +30,6 @@ from pyrosetta.rosetta.core.select.residue_selector import (
 from pyrosetta.rosetta.core.select.util import calc_sc_neighbors
 from pyrosetta.rosetta.protocols import minimization_packing as pack_min
 from pyrosetta.rosetta.protocols.minimization_packing import MinMover
-from pyrosetta.rosetta.basic.options import set_real_option, get_real_option
-
-import hbdesigner.data.residue_constants as rc
-from hbdesigner.data.hbnet import crop_by_distance, get_satisfaction
-from hbdesigner.data.protein import Protein
-from hbdesigner.inference.protein_ops import get_network_res
 
 
 def minimize_and_score_network(
@@ -221,7 +220,13 @@ def pack_and_score_network(
     return scores
 
 
-def pack_network(pose: Pose, core_mask: np.ndarray, minimize: bool = False, cartesian: bool = True, max_BUNs: int = 0) -> Pose:
+def pack_network(
+    pose: Pose,
+    core_mask: np.ndarray,
+    minimize: bool = False,
+    cartesian: bool = True,
+    max_BUNs: int = 0,
+) -> Pose:
     """
     Packs a Pose using a simplified H-bond score function.
 

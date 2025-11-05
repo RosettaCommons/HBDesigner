@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import torch
 from omegaconf import OmegaConf
+
 pd.options.mode.chained_assignment = None  # default='warn'
 
 import hbdesigner.data.residue_constants as rc
@@ -32,11 +33,11 @@ from hbdesigner.inference.protein_ops import (
     get_network_res,
 )
 from hbdesigner.inference.packing import (
-    pack_and_score_network, 
+    pack_and_score_network,
     minimize_and_score_network,
 )
 from hbdesigner.model.hbdesign_model import HBDesigner, load_HBDesigner
-from hbdesigner.model.hbpacker_model import HBPacker, load_HBPacker
+from hbdesigner.model.hbpacker_model import load_HBPacker
 
 from hbdesigner.model.pippack_model import (
     PIPPackFineTune,
@@ -47,7 +48,6 @@ from hbdesigner.model.pippack_model import (
 from hbdesigner.scripts.train_hbdesigner import HBDesignerDataset
 from hbdesigner.scripts.train_hbpacker import HBPackerDataset
 from pyrosetta.rosetta.basic.options import set_real_option
-
 
 
 class InferenceDataset(torch.utils.data.IterableDataset):
@@ -244,7 +244,9 @@ class HBDesRunner:
         initialize_rosetta()
         packing_model = self.load_packing_model()
 
-        print(f"TIME: {(time.time() - t0):.3f}s for input parsing and model initialization.")
+        print(
+            f"TIME: {(time.time() - t0):.3f}s for input parsing and model initialization."
+        )
 
         # 3. Generate design sequences
         ttime = time.time()
@@ -284,8 +286,8 @@ class HBDesRunner:
             )
         else:
             self.rank_and_save_none(
-                results=results, 
-                symmetry_mask=symmetry_mask, 
+                results=results,
+                symmetry_mask=symmetry_mask,
                 guide_res_xyz=guide_res_xyz,
             )
         print(
@@ -386,9 +388,9 @@ class HBDesRunner:
         """Alternate ranking scheme using sequence model confidence."""
         df = pd.DataFrame.from_dict(results, orient="index").reset_index(drop=True)
         df.sort_values(
-            by=["total_conf", "pos_conf", "seq_conf"], 
-            ascending=[False, False, False], 
-            inplace=True
+            by=["total_conf", "pos_conf", "seq_conf"],
+            ascending=[False, False, False],
+            inplace=True,
         )
 
         if guide_res_xyz is not None:
@@ -486,7 +488,7 @@ class HBDesRunner:
             )
         elif self.opts.packer == "none":
             results = self.pack_with_none(
-                samples=samples, 
+                samples=samples,
                 core_mask=core_mask,
             )
         else:
@@ -496,16 +498,15 @@ class HBDesRunner:
         return results
 
     def pack_with_none(
-            self, 
-            samples: List[Dict[str, Any]],
-            core_mask: np.ndarray,
+        self,
+        samples: List[Dict[str, Any]],
+        core_mask: np.ndarray,
     ) -> Dict[str, Any]:
         """Instead of packing, just initialize random sidechains for output."""
         results = {}
         total_chains = np.unique(self.scaffold.chain_index).size
 
         for i, sample in enumerate(samples):
-
             # Apply sampled aatypes to scaffold
             p = deepcopy(self.scaffold)
             p.aatype[:] = rc.restype_order["G"]
@@ -514,9 +515,11 @@ class HBDesRunner:
             # Initialize sidechains with zeroed chi angles
             chi_angles = np.zeros((p.n_res, 4))
             chi_mask = [rc.chi_angles_mask[aa] for aa in p.aatype]
-            chi_mask = np.stack(chi_mask) # [L, 4]
+            chi_mask = np.stack(chi_mask)  # [L, 4]
 
-            atom14_xyz, atom14_mask = build_sc_from_chi(p.atom27_xyz[..., :4, :], p.aatype, chi_angles, chi_mask)
+            atom14_xyz, atom14_mask = build_sc_from_chi(
+                p.atom27_xyz[..., :4, :], p.aatype, chi_angles, chi_mask
+            )
             p.atom27_xyz[..., 4:14, :] = atom14_xyz[..., 4:14, :]
             p.atom27_mask[..., 4:14] = atom14_mask[..., 4:14]
 
@@ -526,15 +529,16 @@ class HBDesRunner:
 
             if (n_core_res >= self.opts.min_core_res) and (n_chains == total_chains):
                 results[hash(p.to_pdb(unk_to_gly=True))] = {
-                    "network": get_network_res(p), 
-                    "protein": p, 
+                    "network": get_network_res(p),
+                    "protein": p,
                     "pos_conf": np.mean(sample["net_res_probs"]),
                     "seq_conf": np.mean(sample["seq_probs"]),
-                    "total_conf": np.mean(sample["seq_probs"]) * np.mean(sample["net_res_probs"]), 
+                    "total_conf": np.mean(sample["seq_probs"])
+                    * np.mean(sample["net_res_probs"]),
                     "sample_num": i,
                     "n_chains": n_chains,
                     "n_core_res": n_core_res,
-                    }
+                }
 
         return results
 
@@ -780,7 +784,7 @@ class HBDesRunner:
                     r["buried_heavy_unsats"] <= self.opts.max_BUNs
                     and r["n_chains"] == total_chains
                     and r["buried_unsat_Hpol"] <= self.opts.max_BUPHs
-                    and r["saturation"] >= self.opts.min_sat 
+                    and r["saturation"] >= self.opts.min_sat
                     and r["n_core_res"] >= self.opts.min_core_res
                 ):
                     passed[r["hash"]] = r
@@ -921,12 +925,14 @@ class HBDesRunner:
 
         if self.opts.packer == "hbpacker":
             print("Using HBPacker for HBDesigner inference...")
-        
+
             # HBPacker params
             self.pack_cfg.model.hbpacker.pack_method = "hbpacker"
             self.pack_cfg.model.hbpacker.pack_mode = "fast"
             self.pack_cfg.model.hbpacker.bb_noise = 0.0
-            packer = load_HBPacker(self.pack_cfg, self.opts.pack_ckpt, self.pack_cfg.device)
+            packer = load_HBPacker(
+                self.pack_cfg, self.opts.pack_ckpt, self.pack_cfg.device
+            )
             return packer
 
         elif self.opts.packer == "pippack":
@@ -936,7 +942,9 @@ class HBDesRunner:
             self.pack_cfg.model.pippack.recycles = 1
             n_models = 3
             pippack_ckpt = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            self.pack_cfg.model.pippack.ckpt = os.path.join(pippack_ckpt, "model/weights/pippack_model_1_ckpt.pt")
+            self.pack_cfg.model.pippack.ckpt = os.path.join(
+                pippack_ckpt, "model/weights/pippack_model_1_ckpt.pt"
+            )
 
             pippack = []
             models = ["1", "2", "3"][:n_models]
@@ -951,7 +959,7 @@ class HBDesRunner:
         elif self.opts.packer == "rosetta":
             print("Using Rosetta packer for HBDesigner inference...")
             return None
-        
+
         elif self.opts.packer == "none":
             print("Skipping packing step entirely...")
             return None
@@ -968,4 +976,3 @@ if __name__ == "__main__":
 
     model_runner = HBDesRunner(args)
     model_runner.run()
-

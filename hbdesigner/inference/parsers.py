@@ -30,7 +30,6 @@ class FileArgumentParser(argparse.ArgumentParser):
 
 
 def get_hbdes_parser() -> FileArgumentParser:
-    
     parser = FileArgumentParser(
         description="Parser for HBDesigner inference config files."
     )
@@ -85,7 +84,7 @@ def get_hbdes_parser() -> FileArgumentParser:
         default="hbpacker",
         choices=["hbpacker", "rosetta", "pippack", "none"],
         help="Packer to use. Default is 'hbpacker', but 'rosetta', 'pippack', and 'none' are also available.",
-    )    
+    )
     parser.add_argument(
         "--pack_crop",
         type=float,
@@ -211,7 +210,7 @@ def get_hbdes_parser() -> FileArgumentParser:
         required=False,
         type=int,
         default=0,
-        help="Minimum number of core residues required for each network. Defaults to 0."
+        help="Minimum number of core residues required for each network. Defaults to 0.",
     )
 
     return parser
