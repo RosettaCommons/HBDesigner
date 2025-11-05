@@ -1,7 +1,7 @@
 import re
 from itertools import combinations
 from typing import List, Tuple, Union
-
+from copy import deepcopy
 import numpy as np
 import pandas as pd
 import pyrosetta
@@ -38,7 +38,7 @@ def symmetrize_output(
     net = df.iloc[row]
 
     # Collect network res
-    p = net.protein.copy()
+    p = deepcopy(net.protein)
     net_mask = p.aatype != rc.restype_order["G"]
     net_res = np.where(net_mask)[0]
 
@@ -322,8 +322,8 @@ def extract_chains(p: Protein, sel_chains: str) -> Tuple[Protein, Protein]:
     # Split protein into used/unused chains
     p_chain_sel = np.array(p_chain_sel)
     chain_mask = np.sum(p_chain_sel[:, None] == p.chain_index[None, :], axis=0) > 0
-    p_used = p.copy().mask(np.where(chain_mask)[0])
-    p_unused = p.copy().mask(np.where(~chain_mask)[0])
+    p_used = deepcopy(p).mask(np.where(chain_mask)[0])
+    p_unused = deepcopy(p).mask(np.where(~chain_mask)[0])
 
     print(f"Extracted chain(s) {sel_chains} from PDB with chains {p_chains_str}")
     return p_used, p_unused

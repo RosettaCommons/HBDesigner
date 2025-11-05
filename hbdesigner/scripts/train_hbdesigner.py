@@ -354,7 +354,7 @@ class HBDesignerDataset(torch.utils.data.IterableDataset):
 
     def featurize(self, p: Protein, hbnet_arr: np.ndarray) -> gd.Data:
         """
-        Featurize Protein and Graph info into HBDesigner3 model inputs.
+        Featurize Protein and Graph info into HBDesigner model inputs.
 
         Arguments:
             p (Protein): Protein object.
@@ -517,199 +517,105 @@ class HBDesignerDataset(torch.utils.data.IterableDataset):
         ).long()  # [B,]
         return batch
 
-    # @staticmethod
-    # def featurize_inference(
-    #     p: Protein,
-    #     n_res: int = 2,
-    #     guide_res: np.ndarray = None,
-    #     guide_radius: float = 1e6,
-    #     guide_seq: str = None,
-    #     min_burial: float = 0.0,
-    # ) -> gd.Data:
-    #     """
-    #     Featurize Protein for inference without available reference HBNet.
+    @staticmethod
+    def featurize_inference(
+        p: Protein,
+        n_res: int = 2,
+        guide_res: np.ndarray = None,
+        guide_radius: float = 1e6,
+        guide_seq: str = None,
+        min_burial: float = 0.0,
+    ) -> gd.Data:
+        """
+        Featurize Protein for HBDesigner inference. Unlike for training, we have no ground truth network here.
 
-    #     Arguments:
-    #         p (Protein): Protein object.
-    #         n_res (int): Number of residues to include in predicted network. Default is 2.
-    #         guide_res (np.ndarray): Array of positions for inclusion in guide atom centroid calculation. Default is None (ignored).
-    #         guide_radius (float): Radius around the guide atom to allow designable. Default is 1e6 (all residues).
-    #         guide_seq (str): Guide sequence to enforce in all designs. Default is None (all UNK).
-    #         min_burial (float): Minimum burial value to allow designable. Default is 0.0. Core is 5.2, Surface is 2.0.
+        Arguments:
+            p (Protein): Protein object.
+            n_res (int): Number of residues to include in predicted network. Default is 2.
+            guide_res (np.ndarray): Array of positions for inclusion in guide atom centroid calculation. Default is None (ignored).
+            guide_radius (float): Radius around the guide atom to allow designable. Default is 1e6 (all residues).
+            guide_seq (str): Guide sequence to enforce in all designs. Default is None (all UNK).
+            min_burial (float): Minimum burial value to allow designable. Default is 0.0. Core is 5.2, Surface is 2.0.
 
-    #     Returns:
-    #         gd.Data: torch_geometric Data object with featurized protein.
-    #     """
-    #     # Protein features
-    #     p.clear_sequence()
-    #     aatype = p.aatype
-    #     atom14_xyz = p.atom27_xyz[:, :14]
-    #     atom14_mask = p.atom27_mask[:, :14]
-    #     residue_index = p.residue_index
-    #     chain_index = p.chain_index
-    #     bb_dihedral = calc_bb_dihedrals(
-    #         p.atom27_xyz[:, :14], p.residue_index, return_mask=False
-    #     )
+        Returns:
+            gd.Data: torch_geometric Data object with featurized protein.
+        """
+        # Protein features
+        p.clear_sequence()
+        aatype = p.aatype
+        atom14_xyz = p.atom27_xyz[:, :14]
+        atom14_mask = p.atom27_mask[:, :14]
+        residue_index = p.residue_index
+        chain_index = p.chain_index
+        bb_dihedral = calc_bb_dihedrals(
+            p.atom27_xyz[:, :14], p.residue_index, return_mask=False
+        )
 
-    #     # Zero out starting dihedrals and get xyz to match
-    #     sc_dihedral = np.zeros((p.n_res, 4), dtype=np.float32)  # [L, 4]
-    #     sc_dihedral_mask = np.array(rc.chi_angles_mask)[aatype]  # [L, 4]
+        # Create the Data object
+        protein_data = gd.Data(
+            num_nodes=aatype.shape[0],
+            x=torch.zeros((1, 1)),  # x is used often to identify the device
+            aatype=torch.from_numpy(aatype).to(torch.long),  # [L]
+            atom14_xyz=torch.from_numpy(atom14_xyz).to(torch.float32),  # [L, 14, 3]
+            atom14_mask=torch.from_numpy(atom14_mask).to(torch.float32),  # [L, 14]
+            residue_index=torch.from_numpy(residue_index).to(torch.int32),  # [L]
+            chain_index=torch.from_numpy(chain_index).to(torch.int32),  # [L]
+            bb_dihedral=torch.from_numpy(bb_dihedral).to(torch.float32),  # [L, 3]
+        )
 
-    #     # Create the Data object
-    #     protein_data = gd.Data(
-    #         num_nodes=aatype.shape[0],
-    #         x=torch.zeros((1, 1)),  # x is used often to identify the device
-    #         aatype=torch.from_numpy(aatype).to(torch.long),  # [L]
-    #         atom14_xyz=torch.from_numpy(atom14_xyz).to(torch.float32),  # [L, 14, 3]
-    #         atom14_mask=torch.from_numpy(atom14_mask).to(torch.float32),  # [L, 14]
-    #         residue_index=torch.from_numpy(residue_index).to(torch.int32),  # [L]
-    #         chain_index=torch.from_numpy(chain_index).to(torch.int32),  # [L]
-    #         bb_dihedral=torch.from_numpy(bb_dihedral).to(torch.float32),  # [L, 3]
-    #         # Empty dihedrals prior to design
-    #         sc_dihedral=torch.from_numpy(sc_dihedral).to(torch.float32),  # [L, 4]
-    #         sc_dihedral_mask=torch.from_numpy(sc_dihedral_mask).to(
-    #             torch.float32
-    #         ),  # [L, 4]
-    #     )
+        # nll_mask is 1 for designable positions, 0 otherwise
+        nll_mask = np.ones_like(p.aatype, dtype=np.int32)
+        protein_data["nll_mask"] = torch.from_numpy(nll_mask).to(torch.float32)
+        protein_data["aatype_masked"] = torch.from_numpy(p.aatype).to(torch.long)
 
-    #     # nll_mask is mask of designable positions
-    #     nll_mask = np.ones_like(p.aatype, dtype=np.int32)
-    #     protein_data["nll_mask"] = torch.from_numpy(nll_mask).to(torch.float32)
-    #     protein_data["aatype_masked"] = torch.from_numpy(p.aatype).to(torch.long)
+        # done_mask is 1 for already-designed positions, 0 otherwise
+        done_mask = np.zeros_like(p.aatype, np.int32)
+        protein_data["done_mask"] = torch.from_numpy(done_mask).to(torch.long)
 
-    #     # done_mask is mask of already-designed positions
-    #     done_mask = np.zeros_like(p.aatype, np.int32)
-    #     protein_data["done_mask"] = torch.from_numpy(done_mask).to(torch.long)
+        # Guide atom cond info
+        guide_atom_sigma = 4.0  # sd of guide atom sampling distribution
+        if guide_res is None:
+            guide_atom_xyz = np.zeros_like(
+                atom14_xyz[0, 0:1, :],
+            )
+            des_mask = np.prod(atom14_mask[..., :4], axis=-1)
+        else:
+            guide_atom_xyz = get_guide_atom(
+                atom14_xyz[guide_res, :3, :], guide_atom_sigma
+            )
+            # Make mask of nearby residues
+            cb_xyz = impute_CB(
+                atom14_xyz[..., 0, :], atom14_xyz[..., 1, :], atom14_xyz[..., 2, :]
+            )
+            cb_dist = np.squeeze(cdist(cb_xyz, guide_atom_xyz))  # [L]
+            des_mask = (cb_dist <= guide_radius) * np.prod(
+                atom14_mask[..., :4], axis=-1
+            )
 
-    #     # Guide atom cond info
-    #     guide_atom_sigma = 4.0  # sd of guide atom sampling distribution
-    #     if guide_res is None:
-    #         guide_atom_xyz = np.zeros_like(
-    #             atom14_xyz[0, 0:1, :],
-    #         )
-    #         des_mask = np.prod(atom14_mask[..., :4], axis=-1)
-    #     else:
-    #         guide_atom_xyz = get_guide_atom(
-    #             atom14_xyz[guide_res, :3, :], guide_atom_sigma
-    #         )
-    #         # Make mask of nearby residues
-    #         cb_xyz = impute_CB(
-    #             atom14_xyz[..., 0, :], atom14_xyz[..., 1, :], atom14_xyz[..., 2, :]
-    #         )
-    #         cb_dist = np.squeeze(cdist(cb_xyz, guide_atom_xyz))  # [L]
-    #         des_mask = (cb_dist <= guide_radius) * np.prod(
-    #             atom14_mask[..., :3], axis=-1
-    #         )
+        # Add burial constraint to designable positions
+        pose = Pose()
+        pose_from_pdbstring(pose, p.to_pdb(unk_to_gly=True))
+        sc_neighbors = np.array(calc_sc_neighbors(pose))
+        sc_neighbor_mask = sc_neighbors >= min_burial
+        des_mask *= sc_neighbor_mask
 
-    #     # Add burial constraint to designable positions
-    #     pose = Pose()
-    #     pose_from_pdbstring(pose, p.to_pdb(unk_to_gly=True))
-    #     sc_neighbors = np.array(calc_sc_neighbors(pose))
-    #     sc_neighbor_mask = sc_neighbors >= min_burial
-    #     des_mask *= sc_neighbor_mask
+        protein_data["des_mask"] = torch.from_numpy(des_mask).to(torch.bool)
+        protein_data["guide_atom_xyz"] = torch.from_numpy(guide_atom_xyz).to(
+            torch.float32
+        )  # [1, 3]
 
-    #     protein_data["des_mask"] = torch.from_numpy(des_mask).to(torch.bool)
-    #     protein_data["guide_atom_xyz"] = torch.from_numpy(guide_atom_xyz).to(
-    #         torch.float32
-    #     )  # [1, 3]
+        # Parse guide sequence
+        guide_seq = "X" * n_res if guide_seq is None else guide_seq
 
-    #     # Parse guide sequence
-    #     guide_seq = "X" * n_res if guide_seq is None else guide_seq
-
-    #     # Seq cond info
-    #     guide_seq = np.array(
-    #         [rc.restype_order.get(aa, rc.restype_num) for aa in guide_seq]
-    #     )
-    #     protein_data["aatype_cond"] = torch.from_numpy(get_seq_cond(guide_seq)).to(
-    #         torch.float32
-    #     )  # [1, 21]
-    #     protein_data["c_idx"] = protein_data["chain_index"]
-    #     return protein_data
-
-    # @staticmethod
-    # def featurize_inference_packing(
-    #     p: Protein,
-    #     hbnet_pos: np.ndarray,
-    #     hbnet_res: np.ndarray,
-    #     pack_crop: float = 10.0,
-    # ) -> gd.Data:
-    #     """
-    #     Featurize Protein for inference without available reference HBNet.
-
-    #     Arguments:
-    #         p (Protein): Protein object.
-    #         hbnet_pos (np.ndarray): Array of positions for inclusion in predicted network.
-    #         hbnet_res (np.ndarray): Array of residues for inclusion in predicted network.
-    #         pack_crop (float): Distance in Angstroms to crop the protein around the network. Default is 10.0.
-
-    #     Returns:
-    #         gd.Data: torch_geometric Data object with featurized protein.
-    #     """
-    #     # Protein features
-    #     p.clear_sequence()
-    #     p.aatype[hbnet_pos] = hbnet_res
-
-    #     # Crop before featurizing
-    #     if pack_crop > 0.0:
-    #         p, knn = crop_by_distance(p, hbnet_pos, pack_crop)
-    #         hbnet_pos = np.where(p.aatype != rc.restype_num)[0]
-    #     else:
-    #         knn = np.arange(p.n_res)
-
-    #     aatype = p.aatype
-    #     atom14_xyz = p.atom27_xyz[:, :14]
-    #     atom14_mask = p.atom27_mask[:, :14]
-    #     residue_index = p.residue_index
-    #     chain_index = p.chain_index
-    #     bb_dihedral = calc_bb_dihedrals(
-    #         p.atom27_xyz[:, :14], p.residue_index, return_mask=False
-    #     )
-
-    #     # Zero out starting dihedrals and get xyz to match
-    #     sc_dihedral = np.zeros((p.n_res, 4), dtype=np.float32)  # [L, 4]
-    #     sc_dihedral_mask = np.array(rc.chi_angles_mask)[aatype]  # [L, 4]
-
-    #     # Zero out starting dihedrals and get xyz to match
-    #     atom14_xyz_sc, atom14_mask_sc = build_sc_from_chi(
-    #         atom14_xyz[:, :4], aatype, sc_dihedral, sc_dihedral_mask
-    #     )
-    #     atom14_xyz[hbnet_pos] = atom14_xyz_sc[hbnet_pos]
-    #     atom14_mask[hbnet_pos] = atom14_mask_sc[hbnet_pos]
-
-    #     # Create the Data object
-    #     protein_data = gd.Data(
-    #         num_nodes=aatype.shape[0],
-    #         x=torch.zeros((1, 1)),  # x is used often to identify the device
-    #         aatype=torch.from_numpy(aatype).to(torch.long),  # [L]
-    #         atom14_xyz=torch.from_numpy(atom14_xyz).to(torch.float32),  # [L, 14, 3]
-    #         atom14_mask=torch.from_numpy(atom14_mask).to(torch.float32),  # [L, 14]
-    #         residue_index=torch.from_numpy(residue_index).to(torch.int32),  # [L]
-    #         chain_index=torch.from_numpy(chain_index).to(torch.int32),  # [L]
-    #         bb_dihedral=torch.from_numpy(bb_dihedral).to(torch.float32),  # [L, 3]
-    #         # Empty dihedrals prior to design
-    #         sc_dihedral=torch.from_numpy(sc_dihedral).to(torch.float32),  # [L, 4]
-    #         sc_dihedral_mask=torch.from_numpy(sc_dihedral_mask).to(
-    #             torch.float32
-    #         ),  # [L, 4]
-    #         pack_knn=torch.from_numpy(knn).to(torch.long),  # [K]
-    #     )
-
-    #     # nll_mask is mask of designable positions
-    #     nll_mask = np.ones_like(p.aatype, dtype=np.int32)
-    #     protein_data["nll_mask"] = torch.from_numpy(nll_mask).to(torch.float32)
-    #     protein_data["aatype_masked"] = torch.from_numpy(p.aatype).to(torch.long)
-
-    #     # done_mask is mask of already-designed positions
-    #     done_mask = np.zeros_like(p.aatype, np.int32)
-    #     protein_data["done_mask"] = torch.from_numpy(done_mask).to(torch.long)
-
-    #     # chi nll mask is mask of packable positions
-    #     protein_data["chi_nll_mask"] = torch.from_numpy(p.aatype != rc.restype_num).to(
-    #         torch.float32
-    #     )
-
-    #     protein_data["c_idx"] = protein_data["chain_index"]
-    #     return protein_data
+        # Seq cond info
+        guide_seq = np.array(
+            [rc.restype_order.get(aa, rc.restype_num) for aa in guide_seq]
+        )
+        protein_data["aatype_cond"] = torch.from_numpy(get_seq_cond(guide_seq)).to(
+            torch.float32
+        )  # [1, 21]
+        protein_data["c_idx"] = protein_data["chain_index"]
+        return protein_data
 
 
 class HBDesignerTrainer(SupervisedTrainer):

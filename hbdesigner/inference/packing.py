@@ -1,5 +1,5 @@
 from typing import Any, Dict, List
-
+from copy import deepcopy
 import networkx as nx
 import numpy as np
 import pyrosetta
@@ -53,7 +53,7 @@ def minimize_and_score_network(
     Returns:
         Dict[str, Any]: A dictionary containing scores and the packed protein.
     """
-    full_scaffold = scaffold.copy()
+    full_scaffold = deepcopy(scaffold)
 
     # Handle if pack is a Protein, not a gd.Data
     if isinstance(pack, Protein):
@@ -99,7 +99,7 @@ def minimize_and_score_network(
         return None
 
     # Run energy scoring vs polyG backbone
-    scores = score_network(pose, scaffold.copy())
+    scores = score_network(pose, deepcopy(scaffold))
     # Run satisfaction/BUNs scoring
     scores.update(get_satisfaction(pose, core_mask))
 
@@ -118,7 +118,7 @@ def minimize_and_score_network(
     full_scaffold.aatype[:] = rc.restype_order["G"]
     full_scaffold.aatype[pack_knn] = protein.aatype
 
-    protein = full_scaffold.copy()
+    protein = deepcopy(full_scaffold)
 
     net_string = get_network_res(protein)
     n_chains = len(set([ns[0] for ns in net_string.split(":")]))
@@ -188,7 +188,7 @@ def pack_and_score_network(
         return None
 
     # Run energy scoring vs polyG backbone
-    scores = score_network(pose, scaffold_cropped.copy())
+    scores = score_network(pose, deepcopy(scaffold_cropped))
     # Run satisfaction/BUNs scoring
     scores.update(get_satisfaction(pose, core_mask))
     net_res = [i for i, aa in enumerate(pose.sequence()) if aa != "G"]
@@ -204,7 +204,7 @@ def pack_and_score_network(
     scaffold.atom27_xyz[knn] = protein.atom27_xyz
     scaffold.atom27_mask[knn] = protein.atom27_mask
 
-    protein = scaffold.copy()
+    protein = deepcopy(scaffold)
 
     # Recalculate net res names after graft for output
     net_string = get_network_res(protein)

@@ -5,7 +5,7 @@ import time
 from functools import partial
 from multiprocessing import Pool
 from typing import Any, Dict, List, Union
-
+from copy import deepcopy
 import numpy as np
 import pandas as pd
 import torch
@@ -17,6 +17,7 @@ from hbdesigner.data.features import calc_sc_dihedrals, impute_CB, build_sc_from
 from hbdesigner.data.hbnet import (
     batch_to_proteins,
     initialize_rosetta,
+    get_guide_atom,
 )
 from hbdesigner.data.protein import Protein
 from hbdesigner.inference.parsers import get_hbdes_parser
@@ -34,14 +35,17 @@ from hbdesigner.inference.packing import (
     pack_and_score_network, 
     minimize_and_score_network,
 )
-from hbdesigner.model.hbdesign_model import HBDesigner3, load_HBDesigner3
+from hbdesigner.model.hbdesign_model import HBDesigner, load_HBDesigner
+from hbdesigner.model.hbpacker_model import HBPacker, load_HBPacker
+
 from hbdesigner.model.pippack_model import (
     PIPPackFineTune,
     apply_logits_to_proteins,
     get_sidechain_logits,
     load_PIPPack,
 )
-from hbdesigner.scripts.train_hbdesigner import HBDesigner3Dataset, get_guide_atom
+from hbdesigner.scripts.train_hbdesigner import HBDesignerDataset
+from hbdesigner.scripts.train_hbpacker import HBPackerDataset
 from pyrosetta.rosetta.basic.options import set_real_option
 
 
@@ -97,8 +101,8 @@ class InferenceDataset(torch.utils.data.IterableDataset):
             # Build up batch to reach specified size
             try:
                 p = self.preds[idx]
-                sample = HBDesigner3Dataset.featurize_inference_packing(
-                    self.scaffold.copy(),
+                sample = HBPackerDataset.featurize_inference(
+                    deepcopy(self.scaffold),
                     np.array(p["net_res"]),
                     np.array(p["seq"]),
                     pack_crop=self.pack_crop,
@@ -206,7 +210,7 @@ class HBDesRunner:
 
     def run(self):
         """
-        Run the HBDesigner3 inference pipeline with the validated options.
+        Run the HBDesigner inference pipeline with the validated options.
         """
         t0 = time.time()
         # 1. Parse input file with specified args
@@ -240,14 +244,14 @@ class HBDesRunner:
         initialize_rosetta()
         packing_model = self.load_packing_model()
 
-        print(f"TIME: {(time.time() - t0):.3f}s for parsing and model initialization.")
+        print(f"TIME: {(time.time() - t0):.3f}s for input parsing and model initialization.")
 
         # 3. Generate design sequences
         ttime = time.time()
         samples = self.sample_from_hbdesigner(design_model, guide_res)
         n_samples = len(samples)
         print(
-            f"Finished generating {n_samples} unique samples with HBDesigner3 in {time.time() - ttime:.3f} sec"
+            f"Finished generating {n_samples} unique samples with HBDesigner in {time.time() - ttime:.3f} sec"
         )
 
         # 4. Pack and score sequences
@@ -459,7 +463,7 @@ class HBDesRunner:
             model (torch.nn.Module): Packing model to use for packing the samples.
         """
         # Cropping during packing will mess up core mask, so we must get it beforehand
-        core_mask = get_core_mask(self.scaffold.copy(), core_cutoff=5.2)
+        core_mask = get_core_mask(deepcopy(self.scaffold), core_cutoff=5.2)
         # Need to set this after pyrosetta init but before packing/scoring
         set_real_option("score:hb_max_energy", self.opts.max_hb_energy)
 
@@ -468,7 +472,7 @@ class HBDesRunner:
                 samples=samples,
                 core_mask=core_mask,
             )
-        elif self.opts.packer == "hbdes3":
+        elif self.opts.packer == "hbpacker":
             results = self.pack_with_hbpacker(
                 samples=samples,
                 core_mask=core_mask,
@@ -487,7 +491,7 @@ class HBDesRunner:
             )
         else:
             raise ValueError(
-                f"Invalid packer {self.opts.packer} specified. Valid options are: 'rosetta', 'hbdes3', or 'pippack'."
+                f"Invalid packer {self.opts.packer} specified. Valid options are: 'rosetta', 'hbpacker', 'pippack', or 'none'."
             )
         return results
 
@@ -503,7 +507,7 @@ class HBDesRunner:
         for i, sample in enumerate(samples):
 
             # Apply sampled aatypes to scaffold
-            p = self.scaffold.copy()
+            p = deepcopy(self.scaffold)
             p.aatype[:] = rc.restype_order["G"]
             p.aatype[sample["net_res"]] = sample["seq"]
 
@@ -538,7 +542,7 @@ class HBDesRunner:
     def pack_with_hbpacker(
         self,
         samples: List[Dict[str, Any]],
-        model: HBDesigner3,
+        model: HBDesigner,
         core_mask: np.ndarray = None,
     ) -> Dict[str, Any]:
         """
@@ -546,7 +550,7 @@ class HBDesRunner:
 
         Arguments:
             samples (List[Dict[str, Any]]): List of samples to pack.
-            model (HBDesigner3): Loaded HBDesigner3 model for packing.
+            model (HBDesigner): Loaded HBDesigner model for packing.
             core_mask (np.ndarray): Core mask for the scaffold.
 
         Returns:
@@ -556,18 +560,17 @@ class HBDesRunner:
         all_packs = []
         batch_size = 10_000
         n_designs = len(samples)
-        n_rec = model.cfg.model.hbdesigner.num_recycles
 
         t0 = time.time()
         # Configure DataLoader to take advantage of multiprocessing
         ds = InferenceDataset(
-            self.scaffold.copy(), samples, batch_size, self.opts.pack_crop
+            deepcopy(self.scaffold), samples, batch_size, self.opts.pack_crop
         )
         dl = torch.utils.data.DataLoader(
             ds,
             batch_size=None,
             num_workers=self.opts.n_workers,
-            collate_fn=HBDesigner3Dataset.collate,
+            collate_fn=HBPackerDataset.collate,
             persistent_workers=True,
         )
         dl = iter(dl)
@@ -576,9 +579,9 @@ class HBDesRunner:
         while True:
             batch = next(dl)
             with torch.autocast(device_type="cuda", dtype=torch.float16):
-                packs, results = model.run_pack_recyc(
+                packs = model.run_pack_recyc(
                     batch.to("cuda" if torch.cuda.is_available() else "cpu"),
-                    n_recycles=n_rec,
+                    n_recycles=model.cfg.model.hbpacker.num_recycles,
                 )
             packs = packs.to("cpu")
             all_packs.extend(packs.to_data_list())
@@ -595,7 +598,7 @@ class HBDesRunner:
             results = p.map(
                 partial(
                     minimize_and_score_network,
-                    scaffold=self.scaffold.copy(),
+                    scaffold=deepcopy(self.scaffold),
                     minimize=True,
                     core_mask=core_mask,
                 ),
@@ -619,7 +622,7 @@ class HBDesRunner:
 
         Arguments:
             samples (List[Dict[str, Any]]): List of samples to pack.
-            model (HBDesigner3): Loaded HBDesigner3 model for packing.
+            model (HBDesigner): Loaded HBDesigner model for packing.
             core_mask (np.ndarray): Core mask for the scaffold.
 
         Returns:
@@ -631,7 +634,7 @@ class HBDesRunner:
             results = p.map(
                 partial(
                     pack_and_score_network,
-                    scaffold=self.scaffold.copy(),
+                    scaffold=deepcopy(self.scaffold),
                     minimize=True,
                     pack_crop=self.opts.pack_crop,
                     core_mask=core_mask,
@@ -671,13 +674,13 @@ class HBDesRunner:
         t0 = time.time()
         # Configure DataLoader to take advantage of multiprocessing
         ds = InferenceDataset(
-            self.scaffold.copy(), samples, batch_size, self.opts.pack_crop
+            deepcopy(self.scaffold), samples, batch_size, self.opts.pack_crop
         )
         dl = torch.utils.data.DataLoader(
             ds,
             batch_size=None,
             num_workers=self.opts.n_workers,
-            collate_fn=HBDesigner3Dataset.collate,
+            collate_fn=HBPackerDataset.collate,
             persistent_workers=True,
         )
         dl = iter(dl)
@@ -743,7 +746,7 @@ class HBDesRunner:
             results = p.map(
                 partial(
                     minimize_and_score_network,
-                    scaffold=self.scaffold.copy(),
+                    scaffold=deepcopy(self.scaffold),
                     minimize=True,
                     core_mask=core_mask,
                     max_BUNs=self.opts.max_BUNs,
@@ -788,21 +791,22 @@ class HBDesRunner:
     @torch.no_grad()
     def sample_from_hbdesigner(
         self,
-        model: HBDesigner3,
+        model: HBDesigner,
         guide_res: np.ndarray = None,
     ) -> List[Dict[str, List[int]]]:
         """
         Generate n_samples samples from HBDesigner model.
 
         Arguments:
-            model (HBDesigner3): Loaded HBDesigner3 model.
+            model (HBDesigner): Loaded HBDesigner model.
             guide_res (np.ndarray, optional): Guide residues for triangulating virtual guide atom.
         Returns:
             List[Dict[str, List[int]]]: List of unique predictions from the model.
 
         """
-        data = HBDesigner3Dataset.featurize_inference(
-            self.scaffold.copy(),
+        # Only need to featurize once
+        data = HBDesignerDataset.featurize_inference(
+            deepcopy(self.scaffold),
             n_res=self.opts.n_res,
             guide_res=guide_res,
             guide_radius=self.opts.guide_radius,
@@ -815,7 +819,7 @@ class HBDesRunner:
         n_tot = data.des_mask.numel()
         print(f"Total Positions: {n_tot} \nDesignable Positions: {n_des}")
         assert n_des >= self.opts.n_res, (
-            "ERROR: Not enough designable positions to generate any networks! Try adjusting your --guide_radius or --min_burial criteria."
+            f"ERROR: Number of designable positions ({n_des}) is less than desired network size ({self.opts.n_res})! Try adjusting your --guide_radius or --min_burial criteria."
         )
 
         # Sampling params
@@ -836,7 +840,7 @@ class HBDesRunner:
         MAX_SAMPLES = 100 * n_copies
 
         # Do collation and transfer ONCE and re-use batch
-        batch = HBDesigner3Dataset.collate([data] * n_copies)
+        batch = HBDesignerDataset.collate([data] * n_copies)
         batch.net_res_num[:] = self.opts.n_res
         batch.to(dev)
 
@@ -886,7 +890,7 @@ class HBDesRunner:
         print(f"Batches: {batches}\tSamples: {batches * (batch_size // num_res)}")
         return unique_preds_full
 
-    def load_design_model(self, guide_res: str = None) -> HBDesigner3:
+    def load_design_model(self, guide_res: str = None) -> HBDesigner:
         """
         Set up design config options and load model weights.
 
@@ -894,20 +898,15 @@ class HBDesRunner:
             guide_res (str, optional): Guide residues for triangulating virtual guide atom.
 
         Returns:
-            HBDesigner3: Loaded HBDesigner3 design model.
+            HBDesigner: Loaded HBDesigner design model.
         """
         self.design_cfg.log_dir = None
         self.design_cfg.num_workers = 0
-        self.design_cfg.model.hbdesigner.num_recycles = 0
-        self.design_cfg.model.hbdesigner.pack = False
-        self.design_cfg.model.hbdesigner.pack_method = None
         self.design_cfg.model.hbdesigner.guide_atom_pct = (
             0.0 if guide_res is None else 1.0
         )
         self.design_cfg.model.hbdesigner.guide_atom_sigma = 4.0
-        self.design_cfg.model.hbdesigner.seq_cond_pct = 0.0
-        self.design_cfg.model.hbdesigner.seq_cond_unk_pct = 0.0
-        return load_HBDesigner3(
+        return load_HBDesigner(
             self.design_cfg, self.opts.design_ckpt, self.design_cfg.device
         )
 
@@ -920,44 +919,37 @@ class HBDesRunner:
         self.pack_cfg.log_dir = None
         self.pack_cfg.num_workers = 0
 
-        if self.opts.packer == "hbdes3":
-            print("Using HBPacker for HBDesigner3 inference...")
-
-            self.pack_cfg.model.hbdesigner.pack = True
-            self.pack_cfg.model.hbdesigner.pack_method = "hbdes3"
-            self.pack_cfg.model.hbdesigner.pack_mode = "fast"
-
-            # Conditioning params
-            self.pack_cfg.model.hbdesigner.guide_atom_pct = 0.0
-            self.pack_cfg.model.hbdesigner.guide_atom_sigma = 4.0
-            self.pack_cfg.model.hbdesigner.seq_cond_pct = 0.0
-            self.pack_cfg.model.hbdesigner.seq_cond_unk_pct = 0.0
-
-            packer = load_HBDesigner3(self.pack_cfg, self.opts.pack_ckpt)
-            packer.eval()
+        if self.opts.packer == "hbpacker":
+            print("Using HBPacker for HBDesigner inference...")
+        
+            # HBPacker params
+            self.pack_cfg.model.hbpacker.pack_method = "hbpacker"
+            self.pack_cfg.model.hbpacker.pack_mode = "fast"
+            self.pack_cfg.model.hbpacker.bb_noise = 0.0
+            packer = load_HBPacker(self.pack_cfg, self.opts.pack_ckpt, self.pack_cfg.device)
             return packer
 
         elif self.opts.packer == "pippack":
-            print("Using PIPPack for HBDesigner3 inference...")
+            print("Using PIPPack for HBDesigner inference...")
 
             # PIPPack params
-            self.pack_cfg.model.frankenpacker.pippack_recycles = 1
+            self.pack_cfg.model.pippack.recycles = 1
             n_models = 3
-            self.pack_cfg.model.frankenpacker.pippack_ckpt = "/users/d/i/dieckhau/dev/ProteinGFN/proteingfn/data/model_weights/pippack_model_1_ckpt.pt"
+            pippack_ckpt = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            self.pack_cfg.model.pippack.ckpt = os.path.join(pippack_ckpt, "model/weights/pippack_model_1_ckpt.pt")
 
             pippack = []
             models = ["1", "2", "3"][:n_models]
             for m in models:
-                ckpt = self.pack_cfg.model.frankenpacker.pippack_ckpt
+                ckpt = self.pack_cfg.model.pippack.ckpt
                 ckpt = "_".join(ckpt.split("_")[:-2]) + f"_{m}_ckpt.pt"
-                self.pack_cfg.model.frankenpacker.pippack_ckpt = ckpt
+                self.pack_cfg.model.pippack.ckpt = ckpt
                 mod = load_PIPPack(self.pack_cfg.model)
-                mod.eval()
                 pippack.append(mod)
             return pippack
 
         elif self.opts.packer == "rosetta":
-            print("Using Rosetta packer for HBDesigner3 inference...")
+            print("Using Rosetta packer for HBDesigner inference...")
             return None
         
         elif self.opts.packer == "none":
@@ -965,13 +957,14 @@ class HBDesRunner:
             return None
         else:
             raise ValueError(
-                "Invalid packer specified. Options are 'rosetta', 'hbdes3', or 'pippack'."
+                "Invalid packer specified. Options are 'hbpacker', 'rosetta', 'pippack', or 'none'."
             )
 
 
 if __name__ == "__main__":
     parser = get_hbdes_parser()
     args = parser.parse_args(sys.argv[1:])
+    print(args)
 
     model_runner = HBDesRunner(args)
     model_runner.run()

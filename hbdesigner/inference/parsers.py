@@ -82,9 +82,9 @@ def get_hbdes_parser() -> FileArgumentParser:
         "--packer",
         type=str,
         required=False,
-        default="hbdes3",
-        choices=["hbdes3", "rosetta", "pippack", "none"],
-        help="Packer to use. Default is 'hbdes3', but 'rosetta', 'pippack', and 'none' are also available.",
+        default="hbpacker",
+        choices=["hbpacker", "rosetta", "pippack", "none"],
+        help="Packer to use. Default is 'hbpacker', but 'rosetta', 'pippack', and 'none' are also available.",
     )    
     parser.add_argument(
         "--pack_crop",

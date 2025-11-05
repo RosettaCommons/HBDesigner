@@ -1695,6 +1695,7 @@ def load_PIPPack(cfg: ModelConfig) -> Optional[PIPPackFineTune]:
 
     # PIPPack can be run on CPU or GPU depending on memory needs
     sidechain_model.to(c.device)
+    sidechain_model.eval()
     return sidechain_model
 
 
