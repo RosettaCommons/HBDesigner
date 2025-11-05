@@ -8,6 +8,7 @@ import pyrosetta
 import time
 import subprocess
 import torch
+import networkx as nx
 import torch_geometric.data as gd
 from pyrosetta import Pose, get_fa_scorefxn
 from pyrosetta.rosetta.basic.options import set_boolean_option, set_real_option
@@ -320,10 +321,8 @@ def biotite_hbond_detect(
     sidechain_stack = atom_stack[:, sidechain_mask]
 
     # Get sc-sc bonds only
-    # AHD_dist = 2.5 # default
-    AHD_dist = 3.2 # more permissive
-    # AHD_dist = 4.0 # very permissive
-    triplets, mask = hbond(sidechain_stack, donor_elements=["O", "N"], acceptor_elements=["O", "N"], cutoff_dist=AHD_dist)
+    AH_dist = 2.5 # default
+    triplets, mask = hbond(sidechain_stack, donor_elements=["O", "N"], acceptor_elements=["O", "N"], cutoff_dist=AH_dist)
 
     pair_list = []
     for donor, _, acceptor in triplets:
@@ -352,6 +351,90 @@ def biotite_hbond_detect(
     t1 = time.time()
     stats["score_time"] = (t1 - t0)
     return pair_list, stats
+
+
+def score_protein(p: Protein) -> Dict[str, float]:
+    """
+    Score an individual Protein for HBond metrics.
+
+    Args:
+        p (Protein): Stripped (repacked) Protein ready for network analysis.
+
+    Returns:
+        Dict[str, float]: Dict of single protein metrics and their labels.
+    """
+
+    # Get bonds and energy metrics from Rosetta
+    bond_list, rosetta_stats = rosetta_hbond_detect(
+        p,
+        max_energy=0.0,
+        optH=True,
+        optH_MCA=False,
+    )
+
+    # Drop ghost residues, which can affect chain counting
+    res_mask = np.prod(p.atom27_mask[:, :4], axis=-1)
+    p = p.mask(np.where(res_mask)[0])
+
+    # Drop non-network res
+    hb_idx = np.where(
+        (p.aatype != rc.restype_order["G"]) * (p.aatype != rc.restype_num)
+    )[0]
+
+    # Check if all chains are used, as they should be
+    chains_total = np.unique(p.chain_index).size
+    p = p.mask(hb_idx)
+    chains_used = np.unique(p.chain_index).size
+    used_all_chains = float(chains_used == chains_total)
+
+    # Count motif nodes and edges
+    hbond_res = []
+    for b in bond_list:
+        hbond_res.extend(list(b))
+    hbond_res = np.unique(hbond_res).size
+    hbond_bonds = len(bond_list)
+    total_res = p.n_res
+    hbond_res_frac = hbond_res / total_res
+
+    # Calculate max pairwise distance b/w motif Cb atoms
+    bb_xyz = p.atom27_xyz[:, :4, :]
+    cb_xyz = impute_CB(bb_xyz[:, 0], bb_xyz[:, 1], bb_xyz[:, 2])
+    cd = cdist(cb_xyz, cb_xyz)
+    max_Cb_dist = np.max(np.triu(cd))
+
+    # Check if residue aatypes are valid
+    valid_res = np.array([rc.restype_order[r] for r in rc.restype_hb_sc])
+    vmask = np.sum(p.aatype == valid_res[:, None], axis=0) > 0
+    valid_res_frac = np.sum(vmask) / total_res
+
+    # Check if all residues are h-bonding
+    pass_relaxed = hbond_res == total_res
+    # Check if network has only one connected component
+    g = nx.Graph()
+    g.add_edges_from(bond_list)
+    n_comp = len(list(nx.connected_components(g)))
+    pass_strict = pass_relaxed and (n_comp == 1)
+
+    score_info = {
+        "pass_strict": float(pass_strict),
+        "pass_relaxed": float(pass_relaxed),
+        "hbond_res_frac": hbond_res_frac,
+        "hbond_res": hbond_res,
+        "hbond_bonds": hbond_bonds,
+        "chains_used": float(chains_used),
+        "used_all_chains": used_all_chains,
+        "total_res": total_res,
+        "max_Cb_dist": max_Cb_dist,
+        "valid_res_frac": valid_res_frac,
+    }
+    score_info.update(rosetta_stats)
+
+    # Collect restype fractions
+    for aa in rc.restypes:
+        score_info[aa + "_frac"] = (
+            np.sum(p.aatype == rc.restype_order[aa]) / total_res
+        )
+    return score_info
 
 
 def clear_non_network_res(

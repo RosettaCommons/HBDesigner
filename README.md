@@ -43,9 +43,36 @@ Each "chunk" can take up to a few hours to complete.
 ### Training the sequence design and packing models
 
 ```
-# Training can take up to 2 days to complete, depending on your GPU/CPU specs
-
+# Sequence design model
 python train_hbdesigner.py --use_wandb
+# Packing model
 python train_hbpacker.py --use_wandb
 
 ```
+Training can take up to 2 days to complete, depending on your GPU/CPU specs.
+
+
+### Evaluating the models
+
+```
+# Design + Packing evaluation
+python evaluate_hbdesigner.py \
+    --pack_config $pack_cfg \
+    --pack_ckpt $pack_ckpt \
+    --num_workers 8 \
+    --pack_method hbpacker \
+    --pack_min \
+    --design_config $design_cfg \
+    --design_ckpt $design_ckpt
+
+# Packing-only evaluation
+python evaluate_packer.py \
+    --pack_config $cfg \
+    --pack_ckpt $ckpt \
+    --num_workers 8 \
+    --pack_method hbpacker \
+    --pack_min
+
+```
+
+Validation takes a few seconds per batch. You must provide the config and ckpt files for each trained model.

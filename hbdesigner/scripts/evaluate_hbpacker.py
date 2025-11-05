@@ -35,12 +35,14 @@ if __name__ == "__main__":
         "--pack_method",
         type=str,
         default="hbpacker",
+        choices=["rosetta", "hbpacker", "pippack", "native"],
         help="Pack method. Options are (rosetta, hbpacker, pippack, native).",
     )
     parser.add_argument(
         "--pack_mode",
         type=str,
         default="fast",
+        choices=["fast", "slow"],
         help="Pack mode. Options are (fast, slow).",
     )
     parser.add_argument(
@@ -96,6 +98,7 @@ if __name__ == "__main__":
     config.model.hbpacker.hbnet_pct = 0.0
     config.model.hbpacker.rescore = False
     config.model.hbpacker.rescore_filter = False
+    config.model.hbpacker.bb_noise = 0.0
 
     steps = args.n_batches
     config.model.hbpacker.batch_size = args.batch_size
@@ -116,10 +119,6 @@ if __name__ == "__main__":
     trainer = HBPackerTrainer(config, print_config=False)
     trainer.load_model_state(args.pack_ckpt)
     initialize_rosetta(args.pack_mode)
-
-    # NOTE on different test loop options
-    # - design=False, pack=True: keep native seq, pack with packer - packing eval
-    # - design=False, pack=False, keep native seq, keep native pack - scoring eval
 
     # Enable repeated runs for errorbars
     repeat_info = {}

@@ -25,9 +25,9 @@ from hbdesigner.data.features import (
 from hbdesigner.data.hbnet import (
     batch_to_proteins,
     pack_with_rosetta,
-    rosetta_hbond_detect,
     clear_non_network_res,
     crop_by_distance,
+    score_protein,
 )
 from hbdesigner.model.pippack_model import (
     apply_logits_to_proteins,
@@ -36,14 +36,13 @@ from hbdesigner.model.pippack_model import (
 )
 from hbdesigner.data.protein import Protein
 from hbdesigner.train.config import TrainConfig
-from hbdesigner.train.trainer import SupervisedTrainer
-from hbdesigner.utils import cycle, seed_everything, worker_init, init_empty
-from hbdesigner.scripts.train_hbdesigner import HBDesignerDataset
+from hbdesigner.utils import cycle, seed_everything, init_empty
+from hbdesigner.scripts.train_hbdesigner import HBDesignerDataset, HBDesignerTrainer
 
 
 class HBPackerDataset(HBDesignerDataset):
     """
-    Dataset for HPacker model.
+    Dataset for HBPacker model.
 
     Iterates over clusters and samples a random assembly, then collects any valid networks.
     Randomly samples from candidate networks according to config params.
@@ -205,6 +204,83 @@ class HBPackerDataset(HBDesignerDataset):
             ],
         ).long()  # [B,]
         return batch
+
+    @staticmethod
+    def convert_batch_design_to_pack(b: gd.Batch, pack_crop: float = 10.0) -> Sequence[gd.Data]:
+        """
+        Convert a design-mode gd.Batch to a pack-mode gd.Batch for packing use.
+
+        Arguments:
+            b (gd.Batch): Batch in design mode.
+            pack_crop (float): Distance in Angstroms to crop the protein around the network. Default is 10.0.
+
+        Returns:
+            Sequence[gd.Data]: List of gd.Data object in pack mode, ready to be collated.
+        """
+        
+        proteins, b_list = batch_to_proteins(b)
+
+        protein_data_list = []
+        for p, b_i in zip(proteins, b_list):
+            # all gly except network res
+            hbnet_pos = np.where(p.aatype != rc.restype_order["G"])[0]
+
+            # Crop if requested
+            if pack_crop > 0.0:
+                p, _ = crop_by_distance(p, hbnet_pos, pack_crop)
+                hbnet_pos = np.where(p.aatype != rc.restype_order["G"])[0]
+
+            # Chi mask includes all decoded network res
+            chi_mask = np.zeros_like(p.aatype, dtype=np.int32)
+            chi_mask[hbnet_pos] = 1
+            chi_mask_bool = chi_mask > 0
+
+            # Clear all sidechains and non-network aatypes
+            p.aatype[~chi_mask_bool] = rc.restype_num
+            aatype = p.aatype
+            p.atom27_xyz[:, 4:] = 0.0
+            p.atom27_mask[:, 4:] = 0.0
+            atom14_xyz = p.atom27_xyz[:, :14]
+            atom14_mask = p.atom27_mask[:, :14]
+            residue_index = p.residue_index
+            chain_index = p.chain_index
+
+            # Zero out starting dihedrals and get xyz to match
+            sc_dihedral = np.zeros((p.n_res, 4), dtype=np.float32)  # [L, 4]
+            sc_dihedral_mask = np.array(rc.chi_angles_mask)[aatype]  # [L, 4]
+            atom14_xyz_sc, atom14_mask_sc = build_sc_from_chi(
+                atom14_xyz[:, :4], aatype, sc_dihedral, sc_dihedral_mask
+            )
+            atom14_xyz[chi_mask_bool] = atom14_xyz_sc[chi_mask_bool]
+            atom14_mask[chi_mask_bool] = atom14_mask_sc[chi_mask_bool]
+
+            bb_dihedral = calc_bb_dihedrals(atom14_xyz, p.residue_index, return_mask=False)
+
+            # Create the Data object
+            protein_data = gd.Data(
+                num_nodes=aatype.shape[0],
+                x=torch.zeros((1, 1)),
+                # Input seq and sidechains
+                aatype=torch.from_numpy(aatype).to(torch.long),  # [L]
+                atom14_xyz=torch.from_numpy(atom14_xyz).to(torch.float32),  # [L, 14, 3]
+                atom14_mask=torch.from_numpy(atom14_mask).to(torch.float32),  # [L, 14]
+                residue_index=torch.from_numpy(residue_index).to(torch.int32),  # [L]
+                chain_index=torch.from_numpy(chain_index).to(torch.int32),  # [L]
+                bb_dihedral=torch.from_numpy(bb_dihedral).to(torch.float32),  # [L, 3]
+                # Zeroed out dihedrals prior to packing
+                sc_dihedral=torch.from_numpy(sc_dihedral).to(torch.float32),  # [L, 4]
+                # Mask of dihedrals for each residue
+                sc_dihedral_mask=torch.from_numpy(sc_dihedral_mask).to(
+                    torch.float32
+                ),  # [L, 4]
+                chi_mask=torch.from_numpy(chi_mask).to(torch.float32),  # [L]
+            )
+            protein_data["c_idx"] = protein_data["chain_index"]
+            protein_data["guide_atom_xyz"] = b_i.guide_atom_xyz
+            protein_data["aatype_cond"] = b_i.aatype_cond
+            protein_data_list.append(protein_data)
+
+        return protein_data_list
 
     # @staticmethod
     # def featurize_inference(
@@ -399,19 +475,11 @@ class HBPackerDataset(HBDesignerDataset):
     #     return protein_data
 
 
-class HBPackerTrainer(SupervisedTrainer):
+class HBPackerTrainer(HBDesignerTrainer):
     def set_default_hps(self, base: TrainConfig) -> None:
         base.model.model_name = "HBPacker"
         base.model.hbpacker.max_res = 6
         base.model.hbpacker.min_res = 2
-
-    def setup(self) -> None:
-        super().setup()
-        n = 0
-        for p in self.model.parameters():
-            if p.requires_grad:
-                n += p.numel()
-        print(f"Number of trainable parameters:\t{n}")
 
     def setup_data(self) -> None:
         c = self.cfg.model.hbpacker
@@ -446,65 +514,14 @@ class HBPackerTrainer(SupervisedTrainer):
             mod.eval()
             self.pippack.append(mod)
 
-    def build_training_data_loader(self) -> DataLoader:
-        return self._make_data_loader(self.train_data)
-
-    def build_validation_data_loader(self) -> DataLoader:
-        return self._make_data_loader(self.valid_data)
-
-    def _make_data_loader(
-        self,
-        src: Dataset,
-    ) -> DataLoader:
-        return DataLoader(
-            dataset=src,
-            num_workers=self.cfg.num_workers,
-            persistent_workers=self.cfg.num_workers > 0,
-            prefetch_factor=2 if self.cfg.num_workers else None,
-            collate_fn=src.collate,
-            worker_init_fn=worker_init,
-        )
-
     def build_test_data_loader(self) -> DataLoader:
         self.test_data = HBPackerDataset(self.cfg, split="test")
         return self._make_data_loader(self.test_data)
 
-    @torch.no_grad()
     def sample_batch(
         self,
-        batch: gd.Batch,
-        seq_sample_temp: float = 0.1,
-        res_sample_temp: float = 0.1,
-    ) -> Tuple[gd.Batch, Dict[int, any]]:
-        """
-        Sample batch with self.model and update the batch object w/network information.
-
-        Args:
-            batch (gd.Batch): Full batch of data for sampling.
-            seq_sample_temp (float): Sampling temperature for seq (aatype) decoding.
-            res_sample_temp (float): Sampling temperature for res (position/stop action) decoding.
-
-        Returns:
-            gd.Batch: Updated batch ready for packing/scoring.
-            Dict[int, any]: Dict of raw prediction results.
-        """
-        self.model.eval()
-        results = self.model.sample(
-            batch.to(self.cfg.device),
-            seq_sample_temp=seq_sample_temp,
-            res_sample_temp=res_sample_temp,
-        )
-        # Apply results to each scaffold in the batch
-        b_list = batch.to_data_list()
-        for r, b in zip(list(results.keys()), b_list):
-            res_idx = results[r]["net_res"]
-            res_aatype = results[r]["seq"]
-            b["aatype"][:] = rc.restype_order["G"]
-            b["aatype"][res_idx] = res_aatype
-            b["nll_mask"] = torch.zeros_like(b["aatype"])
-            b["nll_mask"][res_idx] = 1.0
-            b["chi_nll_mask"][res_idx] = 1.0
-        return self.test_data.collate(b_list), results
+    ) -> None:
+        raise NotImplementedError("Function sample_batch is not implemented for HBPackerTrainer.")
 
     def test_batch(
         self,
@@ -543,7 +560,7 @@ class HBPackerTrainer(SupervisedTrainer):
                     test_info[key].extend(x)
 
             # Compute HBDesigner metrics (Energy, Saturation, Network Recovery)
-            score_info = self.score_protein(p)
+            score_info = score_protein(p)
 
             # Add network scoring data to test_info
             for key, value in score_info.items():
@@ -590,7 +607,7 @@ class HBPackerTrainer(SupervisedTrainer):
             # Save PDBs to disk, if requested
             if dump:
                 for j, p in enumerate(proteins):
-                    fname = f"HBDes3_{i}_{j}.pdb"
+                    fname = f"HBPacker_{i}_{j}.pdb"
                     with open(fname, "w") as fopen:
                         fopen.writelines(p.to_pdb(unk_to_gly=True, no_hetatm=False))
 
@@ -735,89 +752,6 @@ class HBPackerTrainer(SupervisedTrainer):
 
         return proteins, b_list, runtimes
 
-    def score_protein(self, p: Protein) -> Dict[str, float]:
-        """
-        Score an individual Protein for HBond metrics.
-
-        Args:
-            p (Protein): Stripped (repacked) Protein ready for network analysis.
-
-        Returns:
-            Dict[str, float]: Dict of single protein metrics and their labels.
-        """
-
-        # Get bonds and energy metrics from Rosetta
-        bond_list, rosetta_stats = rosetta_hbond_detect(
-            p,
-            max_energy=0.0,
-            optH=True,
-            optH_MCA=False,
-        )
-
-        # Drop ghost residues, which can affect chain counting
-        res_mask = np.prod(p.atom27_mask[:, :4], axis=-1)
-        p = p.mask(np.where(res_mask)[0])
-
-        # Drop non-network res
-        hb_idx = np.where(
-            (p.aatype != rc.restype_order["G"]) * (p.aatype != rc.restype_num)
-        )[0]
-
-        # Check if all chains are used, as they should be
-        chains_total = np.unique(p.chain_index).size
-        p = p.mask(hb_idx)
-        chains_used = np.unique(p.chain_index).size
-        used_all_chains = float(chains_used == chains_total)
-
-        # Count motif nodes and edges
-        hbond_res = []
-        for b in bond_list:
-            hbond_res.extend(list(b))
-        hbond_res = np.unique(hbond_res).size
-        hbond_bonds = len(bond_list)
-        total_res = p.n_res
-        hbond_res_frac = hbond_res / total_res
-
-        # Calculate max pairwise distance b/w motif Cb atoms
-        bb_xyz = p.atom27_xyz[:, :4, :]
-        cb_xyz = impute_CB(bb_xyz[:, 0], bb_xyz[:, 1], bb_xyz[:, 2])
-        cd = cdist(cb_xyz, cb_xyz)
-        max_Cb_dist = np.max(np.triu(cd))
-
-        # Check if residue aatypes are valid
-        valid_res = np.array([rc.restype_order[r] for r in rc.restype_hb_sc])
-        vmask = np.sum(p.aatype == valid_res[:, None], axis=0) > 0
-        valid_res_frac = np.sum(vmask) / total_res
-
-        # Check if all residues are h-bonding
-        pass_relaxed = hbond_res == total_res
-        # Check if network has only one connected component
-        g = nx.Graph()
-        g.add_edges_from(bond_list)
-        n_comp = len(list(nx.connected_components(g)))
-        pass_strict = pass_relaxed and (n_comp == 1)
-
-        score_info = {
-            "pass_strict": float(pass_strict),
-            "pass_relaxed": float(pass_relaxed),
-            "hbond_res_frac": hbond_res_frac,
-            "hbond_res": hbond_res,
-            "hbond_bonds": hbond_bonds,
-            "chains_used": float(chains_used),
-            "used_all_chains": used_all_chains,
-            "total_res": total_res,
-            "max_Cb_dist": max_Cb_dist,
-            "valid_res_frac": valid_res_frac,
-        }
-        score_info.update(rosetta_stats)
-
-        # Collect restype fractions
-        for aa in rc.restypes:
-            score_info[aa + "_frac"] = (
-                np.sum(p.aatype == rc.restype_order[aa]) / total_res
-            )
-        return score_info
-
     def compute_packing_metrics(self, p: Protein, b: gd.Data) -> Dict[str, Any]:
         """Given a packed Protein and its corresponding batch data, compute packing metrics.
 
@@ -958,26 +892,6 @@ class HBPackerTrainer(SupervisedTrainer):
         for p in proteins:
             p.aatype[p.aatype == rc.restype_order["A"]] = rc.restype_order["G"]
         return proteins
-
-    def load_model_state(self, ckpt_path: str) -> None:
-        # Load weights from saved checkpoint.
-        map_location = {"cuda:0": f"cuda:{self.rank}"}
-        state = torch.load(ckpt_path, map_location=map_location)
-
-        self.model.load_state_dict(state["model_state_dict"])
-        self.model.to(self.device)
-
-        # Optimizer and scheduler info.
-        self.opt.load_state_dict(state["opt_state_dict"])
-        if self.cfg.opt.lr_decay is not None:
-            self.lr_sched.load_state_dict(state["lr_sched"])
-
-        # Update initial training step.
-        self.initial_step = state["step"]
-        if self.initial_step > self.cfg.num_training_steps:
-            raise ValueError(
-                f"Current initial_step ({self.initial_step}) > num_training_steps ({self.cfg.num_training_steps}!"
-            )
 
 
 def build_hbpacker_config_longleaf():

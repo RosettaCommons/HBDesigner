@@ -585,6 +585,8 @@ class HBDesigner(nn.Module):
         seq_probs = torch.zeros_like(b.aatype).to(torch.float32)  # [B]
 
         # Calculate allowed counts of each aatype based on cond info
+        # aatype_cond_counts tracks valid aatypes
+        # real_counts tracks strict/ambiguous restype accounting
         aatype_cond_counts = b.aatype_cond * b.net_res_num[:, None]  # [B, 21]
         polars = torch.tensor(rc.restype_hb_idx).to(b.x.device)
         real_counts = torch.zeros_like(aatype_cond_counts)
@@ -598,20 +600,6 @@ class HBDesigner(nn.Module):
         aatype_cond_counts = torch.clone(real_counts)
         aatype_cond_counts[:, rc.restype_hb_idx] += n_unk[:, None]
         real_counts[:, -1] += n_unk
-        # NOTE: aatype_cond_counts tracks valid aatypes
-        # NOTE: real_counts tracks strict/ambiguous restype accounting
-
-        # TODO custom ambiguous conditioning test (comment out later)
-        # NOTE: this uses the native aatype distribution as conditioning and allows any/all combinations of restypes (no strict conditioning)
-        # # Curated dataset fractions
-        # # new_fracs = [0., 0.04, 0.07, 0.09, 0., 0.06, 0.07, 0., 0.06, 0., 0., 0.02, 0., 0., 0., 0.25, 0.21, 0.04, 0.12, 0., 0.]
-        # # Base dataset fractions
-        # new_fracs = [0., 0.08, 0.10, 0.10, 0., 0.08, 0.10, 0., 0.08, 0., 0., 0.04, 0., 0., 0., 0.18, 0.13, 0.04, 0.10, 0., 0.]
-        # b.aatype_cond = torch.tensor(new_fracs).to(b.x.device).repeat(b.aatype_cond.shape[0], 1)
-        # valid_aatypes = [0., 1., 1., 1., 0., 1., 1., 0., 1., 0., 0., 1., 0., 0., 0., 1., 1., 1., 1., 0., 0.,]
-        # aatype_cond_counts = torch.tensor(valid_aatypes).to(b.x.device).repeat(b.aatype_cond.shape[0], 1) * 10
-        # real_counts = [0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 0., 1.,]
-        # real_counts = torch.tensor(real_counts).to(b.x.device).repeat(b.aatype_cond.shape[0], 1) * 10
 
         # Define main function to embed and process the protein for each step
         def get_processed_node_embeddings(b, seq, cond_info):
