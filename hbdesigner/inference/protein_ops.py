@@ -203,24 +203,28 @@ def get_core_mask(scaffold: Protein, core_cutoff: float = 5.2) -> np.ndarray:
     return np.array(core_sel.apply(pose))
 
 
-def validate_guide_res(p: Protein, guide_res: str = None) -> Union[np.ndarray, None]:
+def validate_residues(p: Protein, residues: str = None, mode: str = "guide") -> Union[np.ndarray, None]:
     """
-    Validates and converts string-formatted guide res into np array of positions.
+    Validates and converts string-formatted residues into np array of positions.
     Also converts from PDB chain/res numbering to absolute numbering.
 
     Arguments:
         p (Protein): The Protein object to validate the guide res against.
-        guide_res (str): A comma-separated string of guide residues in PDB format, e.g., 'A12,B45'.
+        residues (str): A comma-separated string of guide residues in PDB format, e.g., 'A12,B45'.
+        mode (str): The mode of validation. Options are 'guide' and 'fixed'. ".
     Returns:
-        np.ndarray: An array of absolute residue indices corresponding to the guide residues.
-                    Returns None if guide_res is None.
+        np.ndarray: An array of absolute residue indices corresponding to the specified residues.
+                    Returns None if residues is None.
     """
-    if guide_res is None:
-        return None
+    if residues is None:
+        if mode == "fixed":
+            return np.empty((0,), dtype=np.int64)
+        else:
+            return None
 
-    guide_res = guide_res.split(",")
+    residues = residues.split(",")
     abs_res = []
-    for res in guide_res:
+    for res in residues:
         pdb_ch, pdb_num = [item for item in re.split("(\\d+)", res) if item]
         matches = np.where(
             (p.residue_index == int(pdb_num))
@@ -232,10 +236,23 @@ def validate_guide_res(p: Protein, guide_res: str = None) -> Union[np.ndarray, N
             )
         abs_res.append(matches[0])
 
-    if len(abs_res) < 2:
+    if (mode == "guide") and (len(abs_res) < 2):
         raise ValueError(
             f"Only {len(abs_res)} provided. You must provide at least 2 guide res for centroid calculation."
         )
+    elif mode == "fixed":
+        abs_res = np.array(abs_res)
+        fixed_res_aatypes = p.aatype[abs_res]
+        invalid = fixed_res_aatypes[:, None] == rc.restype_non_hb_idx[None, :]
+        resnames = [rc.restypes_with_x[idx] for idx in fixed_res_aatypes]
+        description = []
+        for rn, ri in zip(resnames, residues):
+            description.append(ri + "->" + rn)
+        description = " : ".join(description)
+        if np.sum(invalid) > 0.0:
+            raise ValueError(
+                f"Fixed residues contain hydrophobic restypes which are not allowed in HBDesigner networks:\t{description} ")
+
     return np.array(abs_res)
 
 

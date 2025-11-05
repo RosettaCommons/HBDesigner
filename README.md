@@ -110,6 +110,8 @@ These are useful if you have very specific scoring criteria you want to enforce 
 # For example, if designing a homodimer interface, HBDesigner will attempt to copy any non-clashing networks across the interface.
 --symm_chains A,B;C,D # Tie chains A and B together and separately tie chains C and D together.
 
+# Provide 'anchor' residue(s) around which to design a network.
+
 ```
 
 ### Advanced input parameters:

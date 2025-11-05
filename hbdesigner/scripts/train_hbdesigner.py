@@ -525,6 +525,7 @@ class HBDesignerDataset(torch.utils.data.IterableDataset):
         guide_radius: float = 1e6,
         guide_seq: str = None,
         min_burial: float = 0.0,
+        fixed_res: np.ndarray = None
     ) -> gd.Data:
         """
         Featurize Protein for HBDesigner inference. Unlike for training, we have no ground truth network here.
@@ -536,12 +537,22 @@ class HBDesignerDataset(torch.utils.data.IterableDataset):
             guide_radius (float): Radius around the guide atom to allow designable. Default is 1e6 (all residues).
             guide_seq (str): Guide sequence to enforce in all designs. Default is None (all UNK).
             min_burial (float): Minimum burial value to allow designable. Default is 0.0. Core is 5.2, Surface is 2.0.
+            fixed_res (np.ndarray): Array of positions that are already present in the network. Default is None (no fixed residues).
 
         Returns:
             gd.Data: torch_geometric Data object with featurized protein.
         """
         # Protein features
+        p_copy = deepcopy(p)
         p.clear_sequence()
+
+        # Impute aatype and xyz info back in for fixed residues
+        p.aatype[fixed_res] = p_copy.aatype[fixed_res]
+        p.atom27_xyz[fixed_res, :, :] = p_copy.atom27_xyz[fixed_res, :, :]
+        p.atom27_mask[fixed_res, :] = p_copy.atom27_mask[fixed_res, :]
+        # Adjust n_res down for fixed_res
+        n_res -= fixed_res.size
+
         aatype = p.aatype
         atom14_xyz = p.atom27_xyz[:, :14]
         atom14_mask = p.atom27_mask[:, :14]
@@ -565,11 +576,13 @@ class HBDesignerDataset(torch.utils.data.IterableDataset):
 
         # nll_mask is 1 for designable positions, 0 otherwise
         nll_mask = np.ones_like(p.aatype, dtype=np.int32)
+        nll_mask[fixed_res] = 0
         protein_data["nll_mask"] = torch.from_numpy(nll_mask).to(torch.float32)
         protein_data["aatype_masked"] = torch.from_numpy(p.aatype).to(torch.long)
 
         # done_mask is 1 for already-designed positions, 0 otherwise
         done_mask = np.zeros_like(p.aatype, np.int32)
+        done_mask[fixed_res] = 1
         protein_data["done_mask"] = torch.from_numpy(done_mask).to(torch.long)
 
         # Guide atom cond info

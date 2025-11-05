@@ -26,7 +26,7 @@ from hbdesigner.inference.protein_ops import (
     extract_chains,
     get_core_mask,
     get_symmetry_mask,
-    validate_guide_res,
+    validate_residues,
     add_guide_atom,
     concat_proteins,
     symmetrize_output,
@@ -207,6 +207,10 @@ class HBDesRunner:
         )
 
         # Parsing params - can't validate until PDB is loaded
+        if self.opts.fixed_res is not None:
+            n_fixed_res = len(self.opts.fixed_res.split(","))
+            assert (self.opts.n_res - n_fixed_res) > 0, f"Network size ({self.opts.n_res}) must be larger than number of fixed residues ({n_fixed_res})"
+            assert n_fixed_res > 0, "You must provide at least one fixed residue if --fixed_res is specified."
 
     def run(self):
         """
@@ -217,7 +221,20 @@ class HBDesRunner:
         print(f"Running HBDesigner for input {self.opts.pdb}...")
         try:
             self.scaffold = Protein.from_pdb_file(self.opts.pdb)
+
+            if self.opts.fixed_res is not None:
+                fixed_res = validate_residues(self.scaffold, self.opts.fixed_res, mode="fixed")
+            else:
+                fixed_res = np.empty((0,), dtype=np.int64)
+
+            scaffold_copy = deepcopy(self.scaffold)
             self.scaffold.clear_sequence()
+
+            # Impute fixed residues back in
+            self.scaffold.aatype[fixed_res] = scaffold_copy.aatype[fixed_res]
+            self.scaffold.atom27_xyz[fixed_res, ...] = scaffold_copy.atom27_xyz[fixed_res, ...]
+            self.scaffold.atom27_mask[fixed_res, ...] = scaffold_copy.atom27_mask[fixed_res, ...]
+
             if self.opts.sel_chains is not None:
                 self.scaffold, scaffold_unused = extract_chains(
                     self.scaffold, self.opts.sel_chains
@@ -225,7 +242,7 @@ class HBDesRunner:
             symmetry_mask = get_symmetry_mask(self.scaffold, self.opts.symm_chains)
 
             if self.opts.guide_res is not None:
-                guide_res = validate_guide_res(self.scaffold, self.opts.guide_res)
+                guide_res = validate_residues(self.scaffold, self.opts.guide_res, mode="guide")
                 guide_res_xyz = self.scaffold.atom27_xyz[guide_res, :4, :]
             else:
                 guide_res = None
@@ -250,7 +267,7 @@ class HBDesRunner:
 
         # 3. Generate design sequences
         ttime = time.time()
-        samples = self.sample_from_hbdesigner(design_model, guide_res)
+        samples = self.sample_from_hbdesigner(design_model, guide_res, fixed_res)
         n_samples = len(samples)
         print(
             f"Finished generating {n_samples} unique samples with HBDesigner in {time.time() - ttime:.3f} sec"
@@ -613,7 +630,6 @@ class HBDesRunner:
 
         results = self.filter_packs(results)
         print(f"Successes: {len(results)} / {len(all_packs)}")
-        # print(results)
         return results
 
     def pack_with_rosetta(
@@ -797,6 +813,7 @@ class HBDesRunner:
         self,
         model: HBDesigner,
         guide_res: np.ndarray = None,
+        fixed_res: np.ndarray = None,
     ) -> List[Dict[str, List[int]]]:
         """
         Generate n_samples samples from HBDesigner model.
@@ -804,6 +821,7 @@ class HBDesRunner:
         Arguments:
             model (HBDesigner): Loaded HBDesigner model.
             guide_res (np.ndarray, optional): Guide residues for triangulating virtual guide atom.
+            fixed_res (np.ndarray, optional): Fixed residues that are already present in the network.
         Returns:
             List[Dict[str, List[int]]]: List of unique predictions from the model.
 
@@ -816,6 +834,7 @@ class HBDesRunner:
             guide_radius=self.opts.guide_radius,
             guide_seq=self.opts.guide_seq,
             min_burial=self.opts.min_burial,
+            fixed_res=fixed_res,
         )
 
         # Check there are enough designable positions
@@ -845,7 +864,7 @@ class HBDesRunner:
 
         # Do collation and transfer ONCE and re-use batch
         batch = HBDesignerDataset.collate([data] * n_copies)
-        batch.net_res_num[:] = self.opts.n_res
+        batch.net_res_num[:] = self.opts.n_res - fixed_res.size
         batch.to(dev)
 
         while len(unique_preds) < self.opts.n_samples:
@@ -972,7 +991,6 @@ class HBDesRunner:
 if __name__ == "__main__":
     parser = get_hbdes_parser()
     args = parser.parse_args(sys.argv[1:])
-    print(args)
 
     model_runner = HBDesRunner(args)
     model_runner.run()

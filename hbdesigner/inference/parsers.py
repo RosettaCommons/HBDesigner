@@ -212,5 +212,12 @@ def get_hbdes_parser() -> FileArgumentParser:
         default=0,
         help="Minimum number of core residues required for each network. Defaults to 0.",
     )
+    parser.add_argument(
+        "--fixed_res", 
+        required=False, 
+        type=str,
+        default=None,
+        help="Comma-separated list of residues to keep fixed during design, in PDB chain/resnum format. Example: 'A12,B13,B49'."
+    )
 
     return parser
