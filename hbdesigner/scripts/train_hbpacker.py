@@ -38,6 +38,7 @@ from hbdesigner.data.protein import Protein
 from hbdesigner.train.config import TrainConfig
 from hbdesigner.utils import cycle, seed_everything, init_empty
 from hbdesigner.scripts.train_hbdesigner import HBDesignerDataset, HBDesignerTrainer
+from hbdesigner.data.openmm import openmm_minimize
 
 
 class HBPackerDataset(HBDesignerDataset):
@@ -490,6 +491,7 @@ class HBPackerTrainer(HBDesignerTrainer):
                     fname = f"HBPacker_{i}_{j}.pdb"
                     with open(fname, "w") as fopen:
                         fopen.writelines(p.to_pdb(unk_to_gly=True, no_hetatm=False))
+                        print(fname, "out")
 
             # Accumulate values from each batch
             if valid_info == {}:
@@ -598,13 +600,8 @@ class HBPackerTrainer(HBDesignerTrainer):
                     n_workers=n_workers,
                     mode="minimize-cart",
                 )
-            else:
-                proteins = pack_with_rosetta(
-                    proteins,
-                    n_workers=n_workers,
-                    mode="reduce",
-                )
-                print("ran reduce/hydride!")
+                
+                # proteins = openmm_minimize(proteins, n_workers)
 
         elif c.pack_method == "pippack":
 

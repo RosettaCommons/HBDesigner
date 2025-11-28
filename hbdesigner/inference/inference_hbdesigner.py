@@ -356,6 +356,7 @@ class HBDesRunner:
                     df.iloc[i] = r
             # Drop identical symmetrized networks (keep best-scoring one)
             df = df.drop_duplicates(subset=["network"], keep="first")
+            df = df.dropna()
 
         # Do top-K selection AFTER symmetrization to avoid under-sampling
         top_k = min(self.opts.top_k, df.shape[0])

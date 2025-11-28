@@ -97,8 +97,6 @@ if __name__ == "__main__":
     config.model.hbpacker.max_res = 6
     config.model.hbpacker.inter_weight = 1.0
     config.model.hbpacker.hbnet_pct = 0.0
-    config.model.hbpacker.rescore = False
-    config.model.hbpacker.rescore_filter = False
     config.model.hbpacker.bb_noise = 0.0
 
     steps = args.n_batches

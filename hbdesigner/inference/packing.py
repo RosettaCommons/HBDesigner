@@ -91,6 +91,16 @@ def minimize_and_score_network(
     # Minimize, if enabled
     if minimize:
         pose = minimize_network(pose, cartesian=True)
+        # TODO swap out pose for OpenMM
+        # from hbdesigner.data.openmm import run_openmm_minimize
+        # buffer = pyrosetta.rosetta.std.stringbuf()
+        # pose.dump_pdb(pyrosetta.rosetta.std.ostream(buffer))
+        # pdb_block = buffer.str()
+        # protein = Protein.from_pdb_string(pdb_block, discard_Hs=False, from_rosetta=True)
+        # protein = run_openmm_minimize(protein)
+        # pose = Pose()
+        # pdbstr = protein.to_pdb(unk_to_gly=True)
+        # pose_from_pdbstring(pose, pdbstr)
 
     # Check if network is "valid" aka fully connected
     is_valid = check_valid_network(pose)

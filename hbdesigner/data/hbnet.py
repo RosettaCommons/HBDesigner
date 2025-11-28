@@ -247,6 +247,7 @@ def rosetta_hbond_detect(
         acc_res = int(bond.acc_res()) - 1
         don_res = int(bond.don_res()) - 1
         pair_list.append((acc_res, don_res))
+        # print(f"Detected Hbond: Acc {acc_res} Don {don_res} Energy {bond.energy()}")
 
     seq, seq_polyG = pose.sequence(), polyG_pose.sequence()
     net_idx = [i for i, (s, sg) in enumerate(zip(seq, seq_polyG)) if s != sg]
@@ -262,6 +263,7 @@ def rosetta_hbond_detect(
     scorefxn = get_fa_scorefxn()
     energy_full = (scorefxn(pose) - scorefxn(polyG_pose)) / n_res
 
+    pose.dump_pdb("rosetta.pdb")
     # Calculate seq-independent burial of network residues
     sc_neighbors = np.array(calc_sc_neighbors(pose))
     avg_sc_neighbors = np.mean(sc_neighbors[net_idx])
@@ -280,6 +282,8 @@ def rosetta_hbond_detect(
 
 def biotite_hbond_detect(
     p: Protein, 
+    AH_dist: float = 2.5,
+    AHD_angle: float = 120.,
 ) -> List[Tuple[int, int]]:
     """
     Detect HBonds based on Baker-Hubbard criteria using Biotite.
@@ -293,7 +297,7 @@ def biotite_hbond_detect(
     from biotite.structure.io.pdb import PDBFile
     from biotite.structure import hbond
     from io import StringIO
-    from proteingfn.data.protein import PDB_CHAIN_IDS
+    from hbdesigner.data.protein import PDB_CHAIN_IDS
 
     try:
         pdb_str = p.to_pdb()
@@ -321,8 +325,8 @@ def biotite_hbond_detect(
     sidechain_stack = atom_stack[:, sidechain_mask]
 
     # Get sc-sc bonds only
-    AH_dist = 2.5 # default
-    triplets, mask = hbond(sidechain_stack, donor_elements=["O", "N"], acceptor_elements=["O", "N"], cutoff_dist=AH_dist)
+    triplets, mask = hbond(sidechain_stack, donor_elements=["O", "N"], acceptor_elements=["O", "N"],
+                        cutoff_dist=AH_dist, cutoff_angle=AHD_angle)
 
     pair_list = []
     for donor, _, acceptor in triplets:
@@ -335,8 +339,6 @@ def biotite_hbond_detect(
         biotite_chainid = PDB_CHAIN_IDS.index(sidechain_stack.chain_id[acceptor])
         acc_res = np.where((biotite_chainid == p.chain_index) * biotite_resid == p.residue_index)[0][0]
 
-        # don_res = int(sidechain_stack.res_id[donor]) - 1
-        # acc_res = int(sidechain_stack.res_id[acceptor]) - 1
         pair_list.append((acc_res, don_res))
 
     stats = {
@@ -351,6 +353,148 @@ def biotite_hbond_detect(
     t1 = time.time()
     stats["score_time"] = (t1 - t0)
     return pair_list, stats
+
+
+def rosetta_optH(p: Protein) -> Protein:
+    """
+    Load Protein into Rosetta and re-optimize hydrogens.
+
+    Args:
+        p (Protein): Protein to re-optimize hydrogens for.
+
+    Returns:
+        Protein: Protein with re-optimized hydrogens.
+    """
+
+    # Configure scoring settings, if not already set
+    set_boolean_option("packing:no_optH", False)
+    set_boolean_option("packing:optH_MCA", False)
+    set_boolean_option("packing:flip_HNQ", True)
+    set_boolean_option("score:hbond_disable_bbsc_exclusion_rule", True)
+
+    pose = Pose()
+    pose_from_pdbstring(pose, p.to_pdb(unk_to_gly=True))
+
+    # Convert pose to Protein
+    buffer = pyrosetta.rosetta.std.stringbuf()
+    pose.dump_pdb(pyrosetta.rosetta.std.ostream(buffer))
+    pdb_block = buffer.str()
+    p = Protein.from_pdb_string(pdb_block, discard_Hs=False, from_rosetta=True)
+    return p
+
+
+def run_hydride(p: Protein) -> Protein:
+
+    # Parse Protein into Biotite structure
+    from biotite.structure.io.pdb import PDBFile
+    from biotite.structure import connect_via_residue_names
+    from io import StringIO
+    import hydride
+
+    pdb_str = p.to_pdb(unk_to_gly=True)    
+    struct = PDBFile.read(StringIO(pdb_str))
+    atom_array = struct.get_structure()[0, :]
+
+    # Set up charges and bonds for hydride
+    atom_array.bonds = connect_via_residue_names(atom_array)
+    charges = hydride.estimate_amino_acid_charges(atom_array, ph=7.0)
+    atom_array.set_annotation("charge", charges)
+
+    # Add, then relax with UFF
+    atom_array, _ = hydride.add_hydrogen(atom_array)
+    atom_array.coords = hydride.relax_hydrogen(atom_array)
+
+    # Convert back to Protein
+    output = PDBFile()
+    output.set_structure(atom_array)
+    buffer = StringIO()
+    output.write(buffer)
+
+    p = Protein.from_pdb_string(buffer.getvalue(), discard_Hs=False)
+    return p
+
+
+def run_pdb2pqr(p: Protein) -> Protein:
+    """
+    Run PDB2PQR on Protein to add hydrogens."""
+    import subprocess
+    import tempfile
+    import os
+    from contextlib import contextmanager
+
+    @contextmanager
+    def temporary_file(suffix='', dir=None):
+        """Context manager for a temporary file that gets deleted."""
+        fd, path = tempfile.mkstemp(suffix=suffix, dir=dir)
+        os.close(fd)  # Close the file descriptor
+        try:
+            yield path
+        finally:
+            if os.path.exists(path):
+                os.unlink(path)
+
+    temp_dir = '/dev/shm' if os.path.exists('/dev/shm') else None
+    # pdb2pqr_EXE = "/home/hdieckhaus/miniforge3/envs/proteingfn/bin/pdb2pqr"
+    pdb2pqr_EXE = "/proj/kuhl_lab/.conda/envs/hbdesigner/bin/pdb2pqr"
+    with temporary_file(suffix='.pdb', dir=temp_dir) as tmp_input, \
+         temporary_file(suffix='.pdb', dir=temp_dir) as tmp_output:
+        
+        with open(tmp_input, 'w') as f:
+            f.write(p.to_pdb(unk_to_gly=True))
+        
+        pdb2pqr_cmd = f"{pdb2pqr_EXE} --pdb-output {tmp_output} --with-ph 7.0 {tmp_input} {tmp_output}"
+        subprocess.run(
+            pdb2pqr_cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            shell=True,
+        )
+
+        with open(tmp_output, 'r') as f:
+            out_pdb = f.read()
+
+    return Protein.from_pdb_string(out_pdb, discard_Hs=False)
+
+
+def run_reduce(
+    pdb_str: str, his: bool = True, flip: bool = True, database: str = HET_DICT, timeout: Optional[int] = None
+) -> str:
+    """Runs Reduce on a pdb_str
+
+    Args:
+        pdb_str (str): The string of the PDB to run Reduce on.
+        his (bool, optional): If True, include the -HIS argument for Reduce; otherwise, don't include it. Defaults to True.
+        flip (bool, optional): If True, includes the -FLIP argument for Reduce; otherwise, doesn't include it. Defaults to True.
+        database (str, optional): Path to the HETATM database for Reduce. Defaults to HET_DICT.
+        timeout (int, optional): If provided, sets the timeout value for trying to run Reduce. Defaults to None.
+    """
+    # Build the command to run Reduce
+    reduce_cmd = [REDUCE_EXE, "-q", "-DB", database, "-"]
+    if his:
+        reduce_cmd += ["-HIS"]
+    if flip:
+        reduce_cmd += ["-FLIP"]
+    pop = subprocess.Popen(
+        reduce_cmd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+
+    # Pass the string to Reduce
+    if timeout is None:
+        out_pdb = pop.communicate(input=pdb_str)[0]
+    else:
+        # Need a timeout for really large PDBs
+        try:
+            out_pdb = pop.communicate(input=pdb_str, timeout=timeout)[0]
+        except subprocess.TimeoutExpired:
+            pop.kill()
+            raise subprocess.TimeoutExpired
+
+    return out_pdb
 
 
 def score_protein(p: Protein) -> Dict[str, float]:
@@ -556,6 +700,14 @@ def minimize_task(p: Protein, cartesian: bool = True) -> Protein:
         if pose.residue(res).name3() not in ["ALA", "GLY"]:
             movemap.set_chi(res, True)
 
+            # TODO set backbone torsions/xyz moveable?
+            # movemap.set_bb(res, True)
+
+            # Positions +- k of network res
+            # for i in [res - 1, res, res + 1]:
+            #     if (i > 0) and (i <= pose.total_residue()):
+            #         movemap.set_bb(i, True)
+
             if cartesian:
                 for a_idx in range(pose.residue(res).first_sidechain_atom(), pose.residue(res).nheavyatoms() + 1):
                     atom_id = pyrosetta.rosetta.core.id.AtomID(a_idx, res)
@@ -581,124 +733,13 @@ def minimize_task(p: Protein, cartesian: bool = True) -> Protein:
     t1 = time.time()
     ros_p = ros_p.pad(n=p.n_res)
 
+    # print("minimizetime...", t1 - t0)
     if hasattr(p, "pack_time"):
         ros_p.pack_time = p.pack_time + (t1 - t0)
     else:
         ros_p.pack_time = t1 - t0
     return ros_p
 
-
-def run_hydride(p: Protein) -> Protein:
-
-    # Parse Protein into Biotite structure
-    from biotite.structure.io.pdb import PDBFile
-    from biotite.structure import connect_via_residue_names
-    from io import StringIO
-    import hydride
-
-    pdb_str = p.to_pdb(unk_to_gly=True)    
-    struct = PDBFile.read(StringIO(pdb_str))
-    atom_array = struct.get_structure()[0, :]
-
-    # Set up charges and bonds for hydride
-    atom_array.bonds = connect_via_residue_names(atom_array)
-    charges = hydride.estimate_amino_acid_charges(atom_array, ph=7.0)
-    atom_array.set_annotation("charge", charges)
-
-    # Add, then relax with UFF
-    atom_array, _ = hydride.add_hydrogen(atom_array)
-    atom_array.coords = hydride.relax_hydrogen(atom_array)
-
-    # Convert back to Protein
-    output = PDBFile()
-    output.set_structure(atom_array)
-    buffer = StringIO()
-    output.write(buffer)
-
-    p = Protein.from_pdb_string(buffer.getvalue(), discard_Hs=False)
-    return p
-
-
-def run_pdb2pqr(p: Protein) -> Protein:
-    """
-    Run PDB2PQR on Protein to add hydrogens."""
-    import subprocess
-    import tempfile
-    import os
-    from contextlib import contextmanager
-
-    @contextmanager
-    def temporary_file(suffix='', dir=None):
-        """Context manager for a temporary file that gets deleted."""
-        fd, path = tempfile.mkstemp(suffix=suffix, dir=dir)
-        os.close(fd)  # Close the file descriptor
-        try:
-            yield path
-        finally:
-            if os.path.exists(path):
-                os.unlink(path)
-
-    temp_dir = '/dev/shm' if os.path.exists('/dev/shm') else None
-    pdb2pqr_EXE = "/home/hdieckhaus/miniforge3/envs/proteingfn/bin/pdb2pqr"
-    with temporary_file(suffix='.pdb', dir=temp_dir) as tmp_input, \
-         temporary_file(suffix='.pdb', dir=temp_dir) as tmp_output:
-        
-        with open(tmp_input, 'w') as f:
-            f.write(p.to_pdb(unk_to_gly=True))
-        
-        pdb2pqr_cmd = f"{pdb2pqr_EXE} --pdb-output {tmp_output} --with-ph 7.0 {tmp_input} {tmp_output}"
-        subprocess.run(
-            pdb2pqr_cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            shell=True,
-        )
-
-        with open(tmp_output, 'r') as f:
-            out_pdb = f.read()
-
-    return Protein.from_pdb_string(out_pdb, discard_Hs=False)
-
-
-def run_reduce(
-    pdb_str: str, his: bool = True, flip: bool = True, database: str = HET_DICT, timeout: Optional[int] = None
-) -> str:
-    """Runs Reduce on a pdb_str
-
-    Args:
-        pdb_str (str): The string of the PDB to run Reduce on.
-        his (bool, optional): If True, include the -HIS argument for Reduce; otherwise, don't include it. Defaults to True.
-        flip (bool, optional): If True, includes the -FLIP argument for Reduce; otherwise, doesn't include it. Defaults to True.
-        database (str, optional): Path to the HETATM database for Reduce. Defaults to HET_DICT.
-        timeout (int, optional): If provided, sets the timeout value for trying to run Reduce. Defaults to None.
-    """
-    # Build the command to run Reduce
-    reduce_cmd = [REDUCE_EXE, "-q", "-DB", database, "-"]
-    if his:
-        reduce_cmd += ["-HIS"]
-    if flip:
-        reduce_cmd += ["-FLIP"]
-    pop = subprocess.Popen(
-        reduce_cmd,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        text=True,
-    )
-
-    # Pass the string to Reduce
-    if timeout is None:
-        out_pdb = pop.communicate(input=pdb_str)[0]
-    else:
-        # Need a timeout for really large PDBs
-        try:
-            out_pdb = pop.communicate(input=pdb_str, timeout=timeout)[0]
-        except subprocess.TimeoutExpired:
-            pop.kill()
-            raise subprocess.TimeoutExpired
-
-    return out_pdb
 
 def safe_run(p: Protein, mode: str = "pack"):
     """Keeps run from failing due to isolated errors."""
@@ -708,7 +749,7 @@ def safe_run(p: Protein, mode: str = "pack"):
         elif mode == "minimize-cart":
             return minimize_task(p, True)
         elif mode == "reduce":
-            return run_reduce(p, his=True, flip=False)
+            return run_reduce(p, his=True, flip=True)
         elif mode == "hydride":
             return run_hydride(p)
         elif mode == "pdb2pqr":
