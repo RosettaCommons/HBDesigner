@@ -263,6 +263,41 @@ def validate_residues(p: Protein, residues: str = None, mode: str = "guide") -> 
     return np.array(abs_res)
 
 
+def validate_chains(p: Protein, chains: str = None) -> Union[np.ndarray, None]:
+    """
+    Validates and converts a comma-separated string of chain IDs into a design mask.
+
+    Arguments:
+        p (Protein): The Protein object to validate the guide res against.
+        chains (str): A comma-separated string of masked chains in PDB format, e.g., 'A,B,D'.
+    Returns:
+        np.ndarray: A binary mask of designable positions of shape (p.n_res, ). True where designable, False where not.
+    """
+    if chains is None:
+        return np.ones_like(p.aatype, dtype=bool)
+
+    chains = chains.split(",")
+    try:
+        chain_ids = [PDB_CHAIN_IDS.index(ch) for ch in chains]
+    except ValueError as e:
+        raise ValueError(f"Invalid chain ID in input: {e}. Must be one of {PDB_CHAIN_IDS}")
+    
+    for cid in chain_ids:
+        if cid not in p.chain_index:
+            raise ValueError(
+                f"Selected chain {PDB_CHAIN_IDS[cid]} not in provided PDB with chains {[PDB_CHAIN_IDS[c] for c in np.unique(p.chain_index)]}"
+            )
+
+    # True if not in requested chain IDs
+    design_mask = np.isin(p.chain_index, chain_ids, invert=True)
+
+    # False if already noted as a fixed residue
+    fixed_res_mask = p.aatype != rc.restype_num
+    design_mask[fixed_res_mask] = False
+    return design_mask
+
+
+
 def get_symmetry_mask(p: Protein, symm_chains: str = None) -> np.ndarray:
     """
     Calculate binary symmetry mask based on specified chain symmetries.

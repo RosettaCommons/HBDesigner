@@ -111,6 +111,10 @@ These are useful if you have very specific scoring criteria you want to enforce 
 --symm_chains A,B;C,D # Tie chains A and B together and separately tie chains C and D together.
 
 # Provide 'anchor' residue(s) around which to design a network.
+--fixed_res B5 # Design networks using the residue B5 as an anchor, so all networks must contain this residue.
+
+# Turn off design for one or more chains.
+--omit_chains B,C # Turn off chain B and C design options.
 
 ```
 

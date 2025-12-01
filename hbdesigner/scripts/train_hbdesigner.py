@@ -520,6 +520,7 @@ class HBDesignerDataset(torch.utils.data.IterableDataset):
     @staticmethod
     def featurize_inference(
         p: Protein,
+        design_mask: np.ndarray,
         n_res: int = 2,
         guide_res: np.ndarray = None,
         guide_radius: float = 1e6,
@@ -532,6 +533,7 @@ class HBDesignerDataset(torch.utils.data.IterableDataset):
 
         Arguments:
             p (Protein): Protein object.
+            design_mask (np.ndarray): Boolean mask indicating designable positions.
             n_res (int): Number of residues to include in predicted network. Default is 2.
             guide_res (np.ndarray): Array of positions for inclusion in guide atom centroid calculation. Default is None (ignored).
             guide_radius (float): Radius around the guide atom to allow designable. Default is 1e6 (all residues).
@@ -577,6 +579,7 @@ class HBDesignerDataset(torch.utils.data.IterableDataset):
         # nll_mask is 1 for designable positions, 0 otherwise
         nll_mask = np.ones_like(p.aatype, dtype=np.int32)
         nll_mask[fixed_res] = 0
+        nll_mask *= design_mask
         protein_data["nll_mask"] = torch.from_numpy(nll_mask).to(torch.float32)
         protein_data["aatype_masked"] = torch.from_numpy(p.aatype).to(torch.long)
 
@@ -611,6 +614,8 @@ class HBDesignerDataset(torch.utils.data.IterableDataset):
         sc_neighbors = np.array(calc_sc_neighbors(pose))
         sc_neighbor_mask = sc_neighbors >= min_burial
         des_mask *= sc_neighbor_mask
+        des_mask *= design_mask
+        des_mask[fixed_res] = 0
 
         protein_data["des_mask"] = torch.from_numpy(des_mask).to(torch.bool)
         protein_data["guide_atom_xyz"] = torch.from_numpy(guide_atom_xyz).to(

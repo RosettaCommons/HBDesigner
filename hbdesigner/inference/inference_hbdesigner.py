@@ -27,6 +27,7 @@ from hbdesigner.inference.protein_ops import (
     get_core_mask,
     get_symmetry_mask,
     validate_residues,
+    validate_chains,
     add_guide_atom,
     concat_proteins,
     symmetrize_output,
@@ -248,6 +249,11 @@ class HBDesRunner:
                 guide_res = None
                 guide_res_xyz = None
 
+            if self.opts.omit_chains is not None:
+                design_mask = validate_chains(self.scaffold, self.opts.omit_chains)
+            else:
+                design_mask = np.ones_like(self.scaffold.aatype, dtype=bool)
+
         except Exception:
             raise ValueError(
                 f"ERROR: HBDesigner failed to parse PDB file {self.opts.pdb}!"
@@ -267,7 +273,7 @@ class HBDesRunner:
 
         # 3. Generate design sequences
         ttime = time.time()
-        samples = self.sample_from_hbdesigner(design_model, guide_res, fixed_res)
+        samples = self.sample_from_hbdesigner(design_model, design_mask, guide_res, fixed_res)
         n_samples = len(samples)
         print(
             f"Finished generating {n_samples} unique samples with HBDesigner in {time.time() - ttime:.3f} sec"
@@ -818,6 +824,7 @@ class HBDesRunner:
     def sample_from_hbdesigner(
         self,
         model: HBDesigner,
+        design_mask: np.ndarray,
         guide_res: np.ndarray = None,
         fixed_res: np.ndarray = None,
     ) -> List[Dict[str, List[int]]]:
@@ -826,6 +833,7 @@ class HBDesRunner:
 
         Arguments:
             model (HBDesigner): Loaded HBDesigner model.
+            design_mask (np.ndarray): Boolean mask indicating designable positions.
             guide_res (np.ndarray, optional): Guide residues for triangulating virtual guide atom.
             fixed_res (np.ndarray, optional): Fixed residues that are already present in the network.
         Returns:
@@ -841,6 +849,7 @@ class HBDesRunner:
             guide_seq=self.opts.guide_seq,
             min_burial=self.opts.min_burial,
             fixed_res=fixed_res,
+            design_mask=design_mask,
         )
 
         # Check there are enough designable positions

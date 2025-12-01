@@ -226,5 +226,12 @@ def get_hbdes_parser() -> FileArgumentParser:
         default=0.0, 
         help="Maximum energy score to allow for returned networks. More negative values are more strict. Default is 0.0"
     )
+    parser.add_argument(
+        "--omit_chains", 
+        required=False, 
+        type=str,
+        default=None,
+        help="Comma-separated list of chains to omit from design. Residues in these chains will not be eligible for use in designed networks. Example: A,C."
+    )
 
     return parser
