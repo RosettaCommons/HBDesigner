@@ -161,11 +161,11 @@ This setup has a few implications:
 ## Usage Advice
 
 - The larger you set --n_res, the lower the success rate. This means you might want to increase --n_samples when increasing --n_res. Here is a good place to start:
-  - --n_res=2, --n_samples=500
-  - --n_res=3, --n_samples=1000
-  - --n_res=4, --n_samples=2000
-  - --n_res=5, --n_samples=10000
-  - --n_res=6, --n_samples=10000
+  - --n_res=2, --n_samples=100
+  - --n_res=3, --n_samples=500
+  - --n_res=4, --n_samples=500
+  - --n_res=5, --n_samples=1000
+  - --n_res=6, --n_samples=2000
 
 - The smaller amino acids, especially the hydroxyls, have higher success rates. This means that, if you don't care what amino acids are in your network, you can get higher success rates using --guide_seq SXX, --guide_seq TXX, etc.
 

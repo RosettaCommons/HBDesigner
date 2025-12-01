@@ -41,6 +41,7 @@ def symmetrize_output(
     p = deepcopy(net.protein)
     net_mask = p.aatype != rc.restype_order["G"]
     net_res = np.where(net_mask)[0]
+    n_res_asym = net_res.size
 
     for nr in net_res:
         # Copy aatype to symmetry-mates
@@ -76,6 +77,12 @@ def symmetrize_output(
     # Check for clashes between symmetry-mates
     symm_mate_res = np.where(p.aatype != rc.restype_order["G"])[0]
     symm_mate_res = np.setdiff1d(symm_mate_res, net_res)
+    
+    # If network picks overlapping residues on different chains, it can fail to symmetrize
+    if (n_res_asym != symm_mate_res.size):
+        print("Found quasi-symmetric network before symmetrization. Returning un-symmetrized network.")
+        return None
+
     net_res_xyz = np.reshape(p.atom27_xyz[net_res, 4:14], (-1, 3))  # [N, 3]
     symm_mate_xyz = np.reshape(p.atom27_xyz[symm_mate_res, 4:14], (-1, 3))  # [N, 3]
     net_res_mask = np.reshape(p.atom27_mask[net_res, 4:14], (-1, 1))
@@ -86,7 +93,7 @@ def symmetrize_output(
 
     if n_clashes > 0:
         print("Found clash while symmetrizing. Returning un-symmetrized network.")
-        return net
+        return None
     else:
         net.protein = p
         # Update metadata and scores to be symmetry-aware

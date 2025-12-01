@@ -219,5 +219,12 @@ def get_hbdes_parser() -> FileArgumentParser:
         default=None,
         help="Comma-separated list of residues to keep fixed during design, in PDB chain/resnum format. Example: 'A12,B13,B49'."
     )
+    parser.add_argument(
+        "--max_hb_score", 
+        required=False, 
+        type=float, 
+        default=0.0, 
+        help="Maximum energy score to allow for returned networks. More negative values are more strict. Default is 0.0"
+    )
 
     return parser

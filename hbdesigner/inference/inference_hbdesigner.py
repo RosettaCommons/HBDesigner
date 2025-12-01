@@ -356,18 +356,23 @@ class HBDesRunner:
                     df.iloc[i] = r
             # Drop identical symmetrized networks (keep best-scoring one)
             df = df.drop_duplicates(subset=["network"], keep="first")
+            df = df.dropna()
+
+            if df.shape[0] < 1:
+                print("No valid networks passed symmetrization. Ending run.")
+                return
 
         # Do top-K selection AFTER symmetrization to avoid under-sampling
         top_k = min(self.opts.top_k, df.shape[0])
         df_top = df.iloc[:top_k]
-
+        prefix = os.path.basename(self.opts.pdb).removesuffix(".pdb")
+        
         for i in range(top_k):
             net = df_top.iloc[i]
             print(
                 f"Rank {i + 1} \t(Sample {net.sample_num + 1}): \tBUHs: {net.buried_heavy_unsats}, \tBUPHs: {net.buried_unsat_Hpol}, \tSat: {net.saturation:.3f}, \tHB_Score: {net.HB_Score_full:.3f}, \tHB_Score_hb: {net.HB_Score_hb:.3f}, \tNetwork: {net.network}"
             )
             if self.opts.out_dir is not None:
-                prefix = os.path.basename(self.opts.pdb).removesuffix(".pdb")
                 fpath = os.path.join(
                     self.opts.out_dir, f"{prefix}_HBDes_rank_{i + 1}.pdb"
                 )
@@ -797,11 +802,12 @@ class HBDesRunner:
         for i, r in enumerate(results):
             if r is not None:
                 if (
-                    r["buried_heavy_unsats"] <= self.opts.max_BUNs
-                    and r["n_chains"] == total_chains
-                    and r["buried_unsat_Hpol"] <= self.opts.max_BUPHs
-                    and r["saturation"] >= self.opts.min_sat
-                    and r["n_core_res"] >= self.opts.min_core_res
+                    (r["buried_heavy_unsats"] <= self.opts.max_BUNs)
+                    and (r["n_chains"] == total_chains)
+                    and (r["buried_unsat_Hpol"] <= self.opts.max_BUPHs)
+                    and (r["saturation"] >= self.opts.min_sat)
+                    and (r["n_core_res"] >= self.opts.min_core_res)
+                    and (r["HB_Score_full"] <= self.opts.max_hb_score)
                 ):
                     passed[r["hash"]] = r
                     passed[r["hash"]]["sample_num"] = i
