@@ -796,12 +796,13 @@ def get_seq_cond(hbnet_res: np.ndarray) -> np.ndarray:
     for u, c in zip(unique, counts):
         # For UNK token, spread prob out across all polar restypes
         if u == 20:
-            aatype_dist[rc.restype_hb_idx] += 1.0 / rc.restype_hb_idx.size
+            # aatype_dist[rc.restype_hb_idx] += 1.0 / rc.restype_hb_idx.size
+            aatype_dist[rc.restype_hb_idx] += (c / rc.restype_hb_idx.size) / np.sum(counts)
         else:
-            aatype_dist[u] += c
+            # aatype_dist[u] += c 
+            aatype_dist[u] += c / np.sum(counts)
     aatype_dist /= np.sum(aatype_dist) + 1e-8
     aatype_dist[aatype_dist > 10] = 0.0
-
     return aatype_dist[None, :]
 
 
