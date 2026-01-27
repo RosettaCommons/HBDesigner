@@ -1,0 +1,97 @@
+desc: ''
+log_dir: /work/users/d/i/dieckhau/sandbox/HBDesigner/logs/hbdesigner/2025-11-04_17-13-30
+device: cuda:0
+seed: 42
+validate_every: 1024
+checkpoint_every: 50000
+print_every: 16
+num_training_steps: 200000
+num_validation_batches: 128
+num_final_batches: null
+num_workers: 16
+mixed_precision: false
+git_hash: 85c67ae
+use_ddp: false
+ddp_n_procs: 2
+ddp_addr: localhost
+ddp_port: '12345'
+model:
+  model_name: HBDesigner
+  dropout: 0.1
+  pippack:
+    ckpt: ''
+    use_ipmp: true
+    n_points: 8
+    recycle_SC_D_sc: true
+    mask_distances: true
+    device: cuda
+    recycles: 0
+    resampling: false
+  hbdesigner:
+    pn_dim: 128
+    pe_dim: 128
+    pg_dim: 256
+    mlp_inner_dim: 128
+    knn_k: 30
+    num_protein_encoder_layers: 3
+    max_seq_sep: 32
+    num_rbf: 16
+    num_mlp_layers: 3
+    net_res_nll_weight: 1.0
+    seq_nll_weight: 1.0
+    nll_smoothing: 0.0
+    loss_type: focal
+    focal_gamma: 2.0
+    data_location: /work/users/d/i/dieckhau/pdb_2021aug02_hbdesigner4/
+    inter_weight: 1.0
+    hbnet_pct: 0.0
+    batch_size: 10000
+    max_res: 6
+    min_res: 2
+    bb_noise: 0.02
+    rescore: false
+    rescore_filter: false
+    guide_atom_pct: 0.5
+    guide_atom_sigma: 4.0
+    seq_cond_pct: 0.2
+    seq_cond_unk_pct: 0.5
+  hbpacker:
+    pn_dim: 128
+    pe_dim: 128
+    mlp_inner_dim: 128
+    knn_k: 30
+    num_protein_encoder_layers: 3
+    max_seq_sep: 32
+    num_rbf: 16
+    num_mlp_layers: 3
+    chi_mse_weight: 1.0
+    chi_norm_weight: 0.01
+    sc_msd_weight: 1.0
+    sc_clash_weight: 0.0
+    orient_msd_weight: 0.0
+    reweight_chi_mse: false
+    num_recycles: 0
+    data_location: ''
+    inter_weight: 1.0
+    hbnet_pct: 0.0
+    batch_size: 10000
+    bb_noise: 0.0
+    max_res: 6
+    min_res: 2
+    rescore: false
+    rescore_filter: false
+    pack_method: none
+    pack_mode: fast
+    pack_min: true
+    pack_crop: -1.0
+opt:
+  opt: noam
+  learning_rate: 0.001
+  lr_decay: null
+  weight_decay: 0.0
+  momentum: 0.9
+  clip_grad_type: norm
+  clip_grad_param: 10.0
+  adam_eps: 1.0e-09
+  noam_factor: 0.5
+  noam_warmup: 4000
