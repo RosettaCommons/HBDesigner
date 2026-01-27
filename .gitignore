@@ -35,5 +35,4 @@ MANIFEST
 
 # Ignore slurm scripts
 */slurm/
-*.sh
 logs/

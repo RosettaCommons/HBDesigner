@@ -159,7 +159,7 @@ def get_hbdes_parser() -> FileArgumentParser:
         type=str,
         required=False,
         default=None,
-        help="Guide sequence. Default is 'XXX' (3 unknowns). Options include 'ST' (one SER, one THR), 'SX' (one SER, one UNK), etc.",
+        help="Guide sequence. Default is 'X,X,X' (3 unknowns). Options include 'S,T' (one SER, one THR), 'T,X' (one THR, one UNK), 'S|T,N' (one SER or THR, one ASN) etc.",
     )
     # Scoring params
     parser.add_argument(

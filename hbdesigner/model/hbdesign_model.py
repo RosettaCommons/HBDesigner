@@ -786,18 +786,9 @@ class HBDesigner(nn.Module):
         seq_probs = torch.zeros_like(b.aatype).to(torch.float32)  # [B]
 
         # Collect aatype cond counts for record keeping
-        aatype_cond_counts = b.aatype_cond * b.net_res_num[:, None]  # [B, 21]
-        real_counts = torch.zeros_like(aatype_cond_counts)
-        real_counts[aatype_cond_counts >= 1] += aatype_cond_counts[
-            aatype_cond_counts >= 1
-        ].round()
-        aatype_cond_counts[aatype_cond_counts >= 1] -= real_counts[
-            aatype_cond_counts >= 1
-        ]
-        n_unk = torch.sum(aatype_cond_counts, dim=-1)
-        aatype_cond_counts = torch.clone(real_counts)
-        aatype_cond_counts[:, rc.restype_hb_idx] += n_unk[:, None]
-        real_counts[:, -1] += n_unk
+        aatype_cond_N = torch.clone(b.aatype_cond) # [B, 21, 4]
+        # Calculate actual aatype cond
+        b.aatype_cond = torch.sum(b.aatype_cond, dim=-1)  # [B, 21]
         results_dict = {}
 
         # Define main function to embed and process the protein for each step
@@ -905,7 +896,7 @@ class HBDesigner(nn.Module):
             seq_logits = self.seq_layer(protein_nodes[net_res])
 
             # For any samples w/seq cond, mask out all other logits to ensure correct aatype chosen
-            aatypes_not_allowed = (aatype_cond_counts <= 1e-4).to(bool)
+            aatypes_not_allowed = (b.aatype_cond <= 1e-4).to(bool)
             seq_logits[aatypes_not_allowed[net_res_mask]] = -torch.inf
 
             seq_pred, seq_p = self.sample_seq(
@@ -919,7 +910,7 @@ class HBDesigner(nn.Module):
             seq_probs[net_res] = seq_p
 
             # One less res to predict
-            b.net_res_num -= 1  # only 1 if asymmtric
+            b.net_res_num -= 1  # only 1 if asymmetric
             b.net_res_num = torch.clamp(b.net_res_num, min=0)
 
             # Update res-to-predict vector for each graph
@@ -929,16 +920,15 @@ class HBDesigner(nn.Module):
                 if net_res_mask[i]:
                     r_all = seq[net_res][graphs_changed == i]
                     for r in r_all:
-                        # Check if ambiguous or strict residue
-                        if real_counts[i, r] < 1.0:
-                            aatype_cond_counts[i, rc.restype_hb_idx] -= 1
-                            real_counts[i, -1] -= 1
-                        else:
-                            aatype_cond_counts[i, r] -= 1
-                            real_counts[i, r] -= 1
+                        for j in range(aatype_cond_N.shape[-1]):
+                            # Find first matching condition and remove it
+                            if aatype_cond_N[i, r, j] > 1e-4:
+                                aatype_cond_N[i, :, j] = 0.
+                                break
 
             # Update seq dist feature with new conditioning
-            b.aatype_cond = aatype_cond_counts / (b.net_res_num[:, None] + 1e-8)
+            b.aatype_cond = torch.sum(aatype_cond_N, dim=-1)  # [B, 21]
+            b.aatype_cond = b.aatype_cond / (torch.sum(b.aatype_cond, dim=-1, keepdim=True) + 1e-8)
 
             seq_dist_nodes = self.seq_dist_linear(b.aatype_cond)  # [B, pn_dim]
             seq_dist_nodes = seq_dist_nodes.repeat_interleave(

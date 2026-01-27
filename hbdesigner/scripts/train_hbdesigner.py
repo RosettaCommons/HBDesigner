@@ -623,15 +623,13 @@ class HBDesignerDataset(torch.utils.data.IterableDataset):
         )  # [1, 3]
 
         # Parse guide sequence
-        guide_seq = "X" * n_res if guide_seq is None else guide_seq
+        guide_seq = ["X"] * n_res if guide_seq is None else guide_seq
 
         # Seq cond info
-        guide_seq = np.array(
-            [rc.restype_order.get(aa, rc.restype_num) for aa in guide_seq]
-        )
-        protein_data["aatype_cond"] = torch.from_numpy(get_seq_cond(guide_seq)).to(
+        from hbdesigner.data.hbnet import get_seq_cond_inf
+        protein_data["aatype_cond"] = torch.from_numpy(get_seq_cond_inf(guide_seq)).to(
             torch.float32
-        )  # [1, 21]
+        )  # [1, 4, 21]
         protein_data["c_idx"] = protein_data["chain_index"]
         return protein_data
 

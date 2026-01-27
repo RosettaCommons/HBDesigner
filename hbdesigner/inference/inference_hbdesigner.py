@@ -188,7 +188,9 @@ class HBDesRunner:
             f"ERROR: Invalid guide radius {self.opts.guide_radius} provided. --guide_radius cannot be negative."
         )
         if self.opts.guide_seq is None:
-            self.opts.guide_seq = "X" * self.opts.n_res
+            self.opts.guide_seq = ["X"] * self.opts.n_res
+        else:
+            self.opts.guide_seq = self.opts.guide_seq.split(",")
         assert len(self.opts.guide_seq) == self.opts.n_res, (
             f"ERROR: Length of guide seq ({len(self.opts.guide_seq)}, {self.opts.guide_seq}) must match number of designed residues ({self.opts.n_res})"
         )

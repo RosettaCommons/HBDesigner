@@ -796,14 +796,50 @@ def get_seq_cond(hbnet_res: np.ndarray) -> np.ndarray:
     for u, c in zip(unique, counts):
         # For UNK token, spread prob out across all polar restypes
         if u == 20:
-            # aatype_dist[rc.restype_hb_idx] += 1.0 / rc.restype_hb_idx.size
             aatype_dist[rc.restype_hb_idx] += (c / rc.restype_hb_idx.size) / np.sum(counts)
         else:
-            # aatype_dist[u] += c 
             aatype_dist[u] += c / np.sum(counts)
     aatype_dist /= np.sum(aatype_dist) + 1e-8
     aatype_dist[aatype_dist > 10] = 0.0
     return aatype_dist[None, :]
+
+
+def get_seq_cond_inf(hbnet_res: Sequence[str]) -> np.ndarray:
+    """
+    Generate a sequence conditioning vector for a given residue set.
+
+    Arguments:
+        hbnet_res (np.ndarray): Array of aatypes for network of size N with shape [N].
+
+    Returns:
+        np.ndarray: Normalized vector of shape [1, 21] ready for input into HBDesigner3Model.
+
+    Notes:
+        All non-X (21) res will receive 1 point per occurrence.
+        Any X res will get their 1 point distributed across all valid polar residues.
+
+    Examples:
+    """
+    aatype_dist = np.zeros((rc.restype_num + 1, len(hbnet_res)), dtype=np.float32) # [21, N_res]
+    for i, res in enumerate(hbnet_res):
+        if len(res) == 1:
+            # If unknown, each polar residue gets 1/11th of the probability
+            if res == "X":
+                aatype_dist[rc.restype_hb_idx, i] += (1.0 / rc.restype_hb_idx.size)
+            # If known, that residue gets all the probability
+            else:
+                aatype_dist[rc.restype_order[res], i] += 1.0
+        # If more than one residue is present, probability gets spread across them
+        else:
+            print(f"Residue {res} is ambiguous over {res}.")
+            options = res.split("|")
+            for opt in options:
+                aatype_dist[rc.restype_order[opt], i] += (1.0 / len(options))
+
+    # Normalize and zero out
+    aatype_dist /= np.sum(aatype_dist) + 1e-8
+    aatype_dist[aatype_dist > 10] = 0.0
+    return aatype_dist[None, ...]
 
 
 def calc_seq_rec_batched(
