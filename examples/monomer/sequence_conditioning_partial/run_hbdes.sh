@@ -29,8 +29,6 @@ python $script \
     --design_cfg $design_cfg \
     --design_ckpt $design_ckpt \
     --n_workers 8 \
-    --packer hbpacker \
-    --out_dir ./ \
     --n_samples 200 \
     --n_res 3 \
     --guide_seq X,T,X

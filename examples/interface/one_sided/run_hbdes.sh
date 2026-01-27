@@ -23,7 +23,7 @@ pack_ckpt=/proj/kuhl_lab/HBDesigner_public/HBDesigner/model_weights/pack.pt
 script=/proj/kuhl_lab/HBDesigner_public/HBDesigner/hbdesigner/inference/inference_hbdesigner.py
 
 python $script \
-    --pdb ../1PGA.pdb \
+    --pdb ../1YRK.pdb \
     --pack_cfg $pack_cfg \
     --pack_ckpt $pack_ckpt \
     --design_cfg $design_cfg \
@@ -31,4 +31,6 @@ python $script \
     --n_workers 8 \
     --n_samples 200 \
     --n_res 3 \
-    --guide_seq S,N,T
+    --top_k 5 \
+    --fixed_res B5 \
+    --omit_chains B

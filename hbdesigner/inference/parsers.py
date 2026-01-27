@@ -1,4 +1,5 @@
 import argparse
+import os
 from typing import Sequence
 
 
@@ -66,8 +67,8 @@ def get_hbdes_parser() -> FileArgumentParser:
         "--out_dir",
         type=str,
         required=False,
-        default=None,
-        help="Output directory for saving new files. Defaults to None, which means no files will be saved.",
+        default=os.getcwd(),
+        help="Output directory for saving new files. Defaults to current working directory.",
     )
     # Runtime optimization params
     parser.add_argument(
