@@ -787,8 +787,9 @@ class HBDesigner(nn.Module):
 
         # Collect aatype cond counts for record keeping
         aatype_cond_N = torch.clone(b.aatype_cond) # [B, 21, 4]
-        # Calculate actual aatype cond
+        # Calculate actual total aatype cond
         b.aatype_cond = torch.sum(b.aatype_cond, dim=-1)  # [B, 21]
+        b.aatype_cond = b.aatype_cond / (torch.sum(b.aatype_cond, dim=-1, keepdim=True) + 1e-8)
         results_dict = {}
 
         # Define main function to embed and process the protein for each step

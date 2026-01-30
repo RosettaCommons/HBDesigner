@@ -526,7 +526,8 @@ class HBDesignerDataset(torch.utils.data.IterableDataset):
         guide_radius: float = 1e6,
         guide_seq: str = None,
         min_burial: float = 0.0,
-        fixed_res: np.ndarray = None
+        fixed_res: np.ndarray = None,
+        omit_AA: Sequence[str] = None,
     ) -> gd.Data:
         """
         Featurize Protein for HBDesigner inference. Unlike for training, we have no ground truth network here.
@@ -540,6 +541,7 @@ class HBDesignerDataset(torch.utils.data.IterableDataset):
             guide_seq (str): Guide sequence to enforce in all designs. Default is None (all UNK).
             min_burial (float): Minimum burial value to allow designable. Default is 0.0. Core is 5.2, Surface is 2.0.
             fixed_res (np.ndarray): Array of positions that are already present in the network. Default is None (no fixed residues).
+            omit_AA (Sequence[str]): List of amino acid single-letter codes to omit from designs. Default is None (no omissions).
 
         Returns:
             gd.Data: torch_geometric Data object with featurized protein.
@@ -627,7 +629,7 @@ class HBDesignerDataset(torch.utils.data.IterableDataset):
 
         # Seq cond info
         from hbdesigner.data.hbnet import get_seq_cond_inf
-        protein_data["aatype_cond"] = torch.from_numpy(get_seq_cond_inf(guide_seq)).to(
+        protein_data["aatype_cond"] = torch.from_numpy(get_seq_cond_inf(guide_seq, omit_AA)).to(
             torch.float32
         )  # [1, 4, 21]
         protein_data["c_idx"] = protein_data["chain_index"]

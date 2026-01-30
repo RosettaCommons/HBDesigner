@@ -234,5 +234,12 @@ def get_hbdes_parser() -> FileArgumentParser:
         default=None,
         help="Comma-separated list of chains to omit from design. Residues in these chains will not be eligible for use in designed networks. Example: A,C."
     )
+    parser.add_argument(
+        "--omit_AA",
+        required=False,
+        type=str,
+        default=None,
+        help="Comma-separated list of amino acids to omit from design. Residues of these types will not be eligible for use in designed networks. Example: R,K means no LYS or ARG allowed."
+    )
 
     return parser

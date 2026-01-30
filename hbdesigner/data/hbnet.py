@@ -804,12 +804,13 @@ def get_seq_cond(hbnet_res: np.ndarray) -> np.ndarray:
     return aatype_dist[None, :]
 
 
-def get_seq_cond_inf(hbnet_res: Sequence[str]) -> np.ndarray:
+def get_seq_cond_inf(hbnet_res: Sequence[str], omit_AA: Sequence[str] = None) -> np.ndarray:
     """
     Generate a sequence conditioning vector for a given residue set.
 
     Arguments:
         hbnet_res (np.ndarray): Array of aatypes for network of size N with shape [N].
+        omit_AA (Sequence[str]): List of residue types to omit from consideration.
 
     Returns:
         np.ndarray: Normalized vector of shape [1, 21] ready for input into HBDesigner3Model.
@@ -821,11 +822,20 @@ def get_seq_cond_inf(hbnet_res: Sequence[str]) -> np.ndarray:
     Examples:
     """
     aatype_dist = np.zeros((rc.restype_num + 1, len(hbnet_res)), dtype=np.float32) # [21, N_res]
+
+    # Collect any omitted AAs and exclude them
+    allowed_res = set(rc.restype_hb_idx)
+    for omitted_AA in omit_AA:
+        if rc.restype_order[omitted_AA] in allowed_res:
+            allowed_res.remove(rc.restype_order[omitted_AA])
+    n_allowed = len(allowed_res)
+    restype_hb_idx_allowed = np.array(list(allowed_res))
+
     for i, res in enumerate(hbnet_res):
         if len(res) == 1:
-            # If unknown, each polar residue gets 1/11th of the probability
+            # If unknown, each allowed polar residue gets 1/N
             if res == "X":
-                aatype_dist[rc.restype_hb_idx, i] += (1.0 / rc.restype_hb_idx.size)
+                aatype_dist[restype_hb_idx_allowed, i] += (1.0 / n_allowed)
             # If known, that residue gets all the probability
             else:
                 aatype_dist[rc.restype_order[res], i] += 1.0
@@ -837,7 +847,7 @@ def get_seq_cond_inf(hbnet_res: Sequence[str]) -> np.ndarray:
                 aatype_dist[rc.restype_order[opt], i] += (1.0 / len(options))
 
     # Normalize and zero out
-    aatype_dist /= np.sum(aatype_dist) + 1e-8
+    aatype_dist /= np.sum(aatype_dist, axis=0)
     aatype_dist[aatype_dist > 10] = 0.0
     return aatype_dist[None, ...]
 

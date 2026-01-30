@@ -194,6 +194,26 @@ class HBDesRunner:
         assert len(self.opts.guide_seq) == self.opts.n_res, (
             f"ERROR: Length of guide seq ({len(self.opts.guide_seq)}, {self.opts.guide_seq}) must match number of designed residues ({self.opts.n_res})"
         )
+        # Can't include omitted AAs in the guide sequence
+        if self.opts.omit_AA is None:
+            self.opts.omit_AA = []
+        else:
+            self.opts.omit_AA = self.opts.omit_AA.split(",")
+            for aa in self.opts.omit_AA:
+                assert aa in rc.restype_hb_sc, (
+                    f"ERROR: Invalid omitted amino acid {aa} provided. --omit_AA options are: {','.join(rc.restype_hb_sc)}."
+                )
+
+        # Check that guide seqs are valid aas
+        for gs in self.opts.guide_seq:
+            for gs_aa in gs.split("|"):
+                if gs_aa in self.opts.omit_AA:
+                    raise ValueError(
+                        f"ERROR: Guide sequence residue {gs_aa} cannot be included in omitted amino acids {','.join(self.opts.omit_AA)}!"
+                    )
+                assert (gs_aa in rc.restype_hb_sc) or (gs_aa == "X"), (
+                    f"ERROR: Invalid guide sequence residue {gs_aa} provided. --guide_seq options are: {','.join(rc.restype_hb_sc)} or 'X' for unknown."
+                )
 
         # Scoring params
         assert 0 <= self.opts.max_BUNs, (
@@ -852,6 +872,7 @@ class HBDesRunner:
             min_burial=self.opts.min_burial,
             fixed_res=fixed_res,
             design_mask=design_mask,
+            omit_AA=self.opts.omit_AA,
         )
 
         # Check there are enough designable positions
