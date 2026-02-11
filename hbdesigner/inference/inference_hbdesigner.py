@@ -1026,9 +1026,13 @@ class HBDesRunner:
             )
 
 
-if __name__ == "__main__":
+def cli():
     parser = get_hbdes_parser()
     args = parser.parse_args(sys.argv[1:])
 
     model_runner = HBDesRunner(args)
     model_runner.run()
+
+
+if __name__ == "__main__":
+    cli()

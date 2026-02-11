@@ -20,3 +20,6 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
+
+[project.scripts]
+hbdesigner = "hbdesigner.inference.inference_hbdesigner:cli"
