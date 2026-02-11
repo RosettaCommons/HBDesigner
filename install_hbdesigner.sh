@@ -13,7 +13,7 @@ pip install torch==2.8
 
 # 2. torch-geometric and scatter (need to install torch first)
 pip install torch_geometric
-pip install torch_scatter -f https://data.pyg.org/whl/torch-2.8.0+cu128.html
+pip install torch_scatter torch_cluster -f https://data.pyg.org/whl/torch-2.8.0+cu128.html
 
 # 3. Other dependencies
 pip install omegaconf biopython wandb ruff pytest "numpy==1.26.4" scipy networkx pandas pebble

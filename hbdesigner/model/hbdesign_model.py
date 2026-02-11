@@ -963,7 +963,7 @@ def load_HBDesigner(
     device: str = "cuda",
 ) -> HBDesigner:
     # Load pre-trained weights
-    ckpt = torch.load(ckpt, map_location="cpu")
+    ckpt = torch.load(ckpt, map_location="cpu", weights_only=False)
 
     model = HBDesigner(cfg)
     model.load_state_dict(ckpt["model_state_dict"])

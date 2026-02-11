@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import torch
 from omegaconf import OmegaConf
+from pathlib import Path
 
 pd.options.mode.chained_assignment = None  # default='warn'
 
@@ -140,19 +141,6 @@ class HBDesRunner:
         assert os.path.isfile(self.opts.pdb), (
             f"ERROR: Invalid input file {self.opts.pdb} provided."
         )
-        assert os.path.isfile(self.opts.design_ckpt), (
-            f"ERROR: Invalid design ckpt file {self.opts.design_ckpt} provided."
-        )
-        assert os.path.isfile(self.opts.design_cfg), (
-            f"ERROR: Invalid design config file {self.opts.design_cfg} provided."
-        )
-        assert os.path.isfile(self.opts.pack_ckpt), (
-            f"ERROR: Invalid pack ckpt file {self.opts.pack_ckpt} provided."
-        )
-        assert os.path.isfile(self.opts.pack_cfg), (
-            f"ERROR: Invalid pack config file {self.opts.pack_cfg} provided."
-        )
-
         assert 1 <= self.opts.n_workers, (
             f"ERROR: Invalid number of workers {self.opts.n_workers} provided. --n_workers must be >=1."
         )
@@ -234,6 +222,12 @@ class HBDesRunner:
             n_fixed_res = len(self.opts.fixed_res.split(","))
             assert (self.opts.n_res - n_fixed_res) > 0, f"Network size ({self.opts.n_res}) must be larger than number of fixed residues ({n_fixed_res})"
             assert n_fixed_res > 0, "You must provide at least one fixed residue if --fixed_res is specified."
+
+        # Retrieve model weights and configurations
+        self.opts.pack_cfg = os.path.join(Path(__file__).parents[2], "model_weights/pack.yaml")
+        self.opts.pack_ckpt = os.path.join(Path(__file__).parents[2], "model_weights/pack.pt")
+        self.opts.design_cfg = os.path.join(Path(__file__).parents[2], f"model_weights/design_020.yaml")
+        self.opts.design_ckpt = os.path.join(Path(__file__).parents[2], f"model_weights/{self.opts.design_model}.pt")
 
     def run(self):
         """
@@ -968,7 +962,7 @@ class HBDesRunner:
         )
         self.design_cfg.model.hbdesigner.guide_atom_sigma = 4.0
         return load_HBDesigner(
-            self.design_cfg, self.opts.design_ckpt, self.design_cfg.device
+            self.design_cfg, self.opts.design_ckpt, self.design_cfg.device,
         )
 
     def load_packing_model(

@@ -950,7 +950,7 @@ def load_HBPacker(
     device: str = "cuda",
 ) -> HBPacker:
     # Load pre-trained weights
-    ckpt = torch.load(ckpt, map_location="cpu")
+    ckpt = torch.load(ckpt, map_location="cpu", weights_only=False)
 
     model = HBPacker(cfg)
     model.load_state_dict(ckpt["model_state_dict"])

@@ -40,28 +40,12 @@ def get_hbdes_parser() -> FileArgumentParser:
         "--pdb", type=str, required=True, help="Input PDB file to process."
     )
     parser.add_argument(
-        "--design_ckpt",
+        "--design_model",
         type=str,
-        required=True,
-        help="Design model checkpoint file to use for inference.",
-    )
-    parser.add_argument(
-        "--design_cfg",
-        type=str,
-        required=True,
-        help="Design model config file to use for model params.",
-    )
-    parser.add_argument(
-        "--pack_cfg",
-        type=str,
-        default=None,
-        help="Config file for packing model. Only needed if --packer is 'hbdes3'.",
-    )
-    parser.add_argument(
-        "--pack_ckpt",
-        type=str,
-        default=None,
-        help="Checkpoint for packing model. Only needed if --packer is 'hbdes3'.",
+        required=False,
+        default="design_002",
+        choices=["design_002", "design_020"],
+        help="Design model to use. Default is 'design_002' (low noise), but 'design_020' (high noise) is also available.",
     )
     parser.add_argument(
         "--out_dir",
@@ -77,14 +61,6 @@ def get_hbdes_parser() -> FileArgumentParser:
         required=False,
         default=1,
         help="Workers for parallelization (packing). Default is 1. More workers will speed up predictions.",
-    )
-    parser.add_argument(
-        "--packer",
-        type=str,
-        required=False,
-        default="hbpacker",
-        choices=["hbpacker", "rosetta", "pippack", "none"],
-        help="Packer to use. Default is 'hbpacker', but 'rosetta', 'pippack', and 'none' are also available.",
     )
     parser.add_argument(
         "--pack_crop",

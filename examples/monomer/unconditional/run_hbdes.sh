@@ -11,23 +11,13 @@
 #SBATCH --gres=gpu:1
 
 source ~/.bashrc
-conda activate hbdesigner_public
+conda activate hbdesigner
 
 # Design model
-design_cfg=/proj/kuhl_lab/HBDesigner_public/HBDesigner/model_weights/design_020.yaml
-design_ckpt=/proj/kuhl_lab/HBDesigner_public/HBDesigner/model_weights/design_020.pt
 
-# Packing model
-pack_cfg=/proj/kuhl_lab/HBDesigner_public/HBDesigner/model_weights/pack.yaml
-pack_ckpt=/proj/kuhl_lab/HBDesigner_public/HBDesigner/model_weights/pack.pt
-script=/proj/kuhl_lab/HBDesigner_public/HBDesigner/hbdesigner/inference/inference_hbdesigner.py
-
-python $script \
+run_hbdesigner \
     --pdb ../1PGA.pdb \
-    --pack_cfg $pack_cfg \
-    --pack_ckpt $pack_ckpt \
-    --design_cfg $design_cfg \
-    --design_ckpt $design_ckpt \
+    --design_model design_020 \
     --n_workers 8 \
     --n_samples 200 \
     --n_res 3

@@ -22,4 +22,4 @@ classifiers = [
 ]
 
 [project.scripts]
-hbdesigner = "hbdesigner.inference.inference_hbdesigner:cli"
+run_hbdesigner = "hbdesigner.inference.inference_hbdesigner:cli"
