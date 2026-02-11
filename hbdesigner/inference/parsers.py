@@ -43,9 +43,9 @@ def get_hbdes_parser() -> FileArgumentParser:
         "--design_model",
         type=str,
         required=False,
-        default="design_002",
+        default="design_020",
         choices=["design_002", "design_020"],
-        help="Design model to use. Default is 'design_002' (low noise), but 'design_020' (high noise) is also available.",
+        help="Design model to use. Default is 'design_020' (moderate noise), but 'design_002' (low noise) is also available.",
     )
     parser.add_argument(
         "--out_dir",
@@ -61,13 +61,6 @@ def get_hbdes_parser() -> FileArgumentParser:
         required=False,
         default=1,
         help="Workers for parallelization (packing). Default is 1. More workers will speed up predictions.",
-    )
-    parser.add_argument(
-        "--pack_crop",
-        type=float,
-        required=False,
-        default=10.0,
-        help="For speed, packing only uses residues within this many Angstrom of the designed network. Default is 10 Angstrom. To disable cropped packing, set this to 0.",
     )
     # Sampling params
     parser.add_argument(
@@ -106,13 +99,6 @@ def get_hbdes_parser() -> FileArgumentParser:
         required=False,
         default=0.0,
         help="Minimum burial for designable positions, as calculated by Rosetta's sidechain neighbor algorithm. Defaults to 0.0.",
-    )
-    parser.add_argument(
-        "--bb_noise",
-        type=float,
-        required=False,
-        default=0.0,
-        help="Level of backbone noise to add for inference. More noise means more diversity, but lower avg success rate. Default is 0.0.",
     )
     # Conditional information
     parser.add_argument(

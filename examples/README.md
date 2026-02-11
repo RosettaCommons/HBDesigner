@@ -125,9 +125,6 @@ These are useful for enforcing sufficient burial and/or network sequence diversi
 # Temperature range to use for sampling procedure. Good values are 0.1 to 1.0. 
 # Lower values will adhere to conditioning better but will be less diverse, so generation may take longer.
 --T_range 0.3 1.0
-
-# Add backbone noise to input model during sampling. This increases sampling diversity but lowers packing success rates.
---bb_noise 0.1 # this adds 0.1 Angstrom noise
 ```
 
 ### Scoring parameters:
@@ -161,26 +158,4 @@ These are useful if you have very specific scoring criteria you want to enforce 
 
 # Omit certain amino acids
 --omit_AA K,R # don't use LYS or ARG in any networks.
-```
-
-### Advanced input parameters:
-These params offer granular control over the inner workings of the model. In general, don't touch these unless you know what you're doing.
-```
-# Path to trained model checkpoint files.
---design_ckpt /path/to/model.pt
---pack_ckpt /path/to/model.pt
-
-# Path to trained model configuration files.
---design_cfg /path/to/config.yaml
---pack_cfg /path/to/config.yaml
-
-# Enable slower (but more accurate) packing by increasing the rotamer library considered by the Rosetta packer.
---slow
-
-# Use an alternative packer other than HBPacker (rosetta or pippack). These have lower success rates so are only useful for benchmarking.
---packer rosetta 
-
-# Change the packing crop radius (in Angstrom). Larger crops run slower but may be slightly more accurate.
---pack_crop 10.0
-
 ```

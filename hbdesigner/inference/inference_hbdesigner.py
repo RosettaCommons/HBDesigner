@@ -166,9 +166,6 @@ class HBDesRunner:
         assert 0.0 <= self.opts.min_burial, (
             f"ERROR: Invalid minimum burial {self.opts.min_burial} provided. --min_burial cannot be negative."
         )
-        assert 0.0 <= self.opts.bb_noise, (
-            f"ERROR: Invalid backbone noise {self.opts.bb_noise} provided. --bb_noise cannot be negative."
-        )
 
         # Conditioning info
         # Can't validate --guide_res until PDB is loaded
@@ -228,6 +225,9 @@ class HBDesRunner:
         self.opts.pack_ckpt = os.path.join(Path(__file__).parents[2], "model_weights/pack.pt")
         self.opts.design_cfg = os.path.join(Path(__file__).parents[2], f"model_weights/design_020.yaml")
         self.opts.design_ckpt = os.path.join(Path(__file__).parents[2], f"model_weights/{self.opts.design_model}.pt")
+        # These packing options are fixed for inference use
+        self.opts.pack_crop = 10.0 
+        self.opts.packer = "hbpacker"
 
     def run(self):
         """
@@ -919,7 +919,7 @@ class HBDesRunner:
                     batch.clone(),
                     res_sample_temp=res_sample_temp_c,
                     seq_sample_temp=seq_sample_temp_c,
-                    bb_noise=self.opts.bb_noise,
+                    bb_noise=0.0,
                 )
 
             # Convert predictions to lists

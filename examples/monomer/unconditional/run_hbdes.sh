@@ -13,11 +13,8 @@
 source ~/.bashrc
 conda activate hbdesigner
 
-# Design model
-
 run_hbdesigner \
     --pdb ../1PGA.pdb \
-    --design_model design_020 \
     --n_workers 8 \
     --n_samples 200 \
     --n_res 3
