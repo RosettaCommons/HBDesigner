@@ -2,6 +2,11 @@
 #!/bin/bash
 
 source ~/.bashrc
+
+# Clone HBDesigner repository
+git clone https://github.com/Kuhlman-Lab/HBDesigner.git
+cd HBDesigner
+
 # Make HBDesigner environment
 mamba env create -n hbdesigner python=3.10
 

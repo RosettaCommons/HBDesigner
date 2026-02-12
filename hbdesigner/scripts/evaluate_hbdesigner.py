@@ -1,7 +1,7 @@
 import argparse
 import os
 import time
-
+from pathlib import Path
 import numpy as np
 from hbdesigner.data.hbnet import initialize_rosetta
 from hbdesigner.scripts.train_hbdesigner import HBDesignerTrainer
@@ -136,7 +136,6 @@ if __name__ == "__main__":
     if args.first_n is not None:
         steps = None
 
-    print(args.seq_temp, "***", args.pos_temp)
     design_trainer = HBDesignerTrainer(design_config, print_config=False)
     design_trainer.load_model_state(args.design_ckpt)
 
@@ -156,9 +155,7 @@ if __name__ == "__main__":
     pack_config.model.hbpacker.max_res = 6
     pack_config.model.hbpacker.bb_noise = 0.0
 
-    pippack_ckpt = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    pippack_ckpt = os.path.join(pippack_ckpt, "model/weights/pippack_model_1_ckpt.pt")
-    pack_config.model.pippack.ckpt = pippack_ckpt
+    pack_config.model.pippack.ckpt = os.path.join(Path(__file__).parents[2], "model_weights/pippack_model_1_ckpt.pt")
 
     pack_config.model.hbpacker.pack_method = args.pack_method
     pack_config.model.hbpacker.pack_mode = args.pack_mode

@@ -2,6 +2,7 @@ import argparse
 import time
 import os
 import numpy as np
+from pathlib import Path
 
 from hbdesigner.data.hbnet import initialize_rosetta
 from hbdesigner.scripts.train_hbpacker import (
@@ -104,9 +105,7 @@ if __name__ == "__main__":
     steps = args.n_batches
     config.model.hbpacker.batch_size = args.batch_size
 
-    pippack_ckpt = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    pippack_ckpt = os.path.join(pippack_ckpt, "model/weights/pippack_model_1_ckpt.pt")
-    config.model.pippack.ckpt = pippack_ckpt
+    config.model.pippack.ckpt = os.path.join(Path(__file__).parents[2], "model_weights/pippack_model_1_ckpt.pt")
 
     config.model.hbpacker.pack_method = args.pack_method
     config.model.hbpacker.pack_mode = args.pack_mode
@@ -116,12 +115,6 @@ if __name__ == "__main__":
     if args.first_n is not None:
         steps = None
 
-    print(
-        config.model.hbpacker.pack_method,
-        "***",
-        config.model.hbpacker.pack_mode,
-        config.model.hbpacker.pack_min,
-    )
     trainer = HBPackerTrainer(config, print_config=False)
     trainer.load_model_state(args.pack_ckpt)
     initialize_rosetta(args.pack_mode)

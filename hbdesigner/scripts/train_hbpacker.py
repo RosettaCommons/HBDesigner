@@ -604,7 +604,6 @@ class HBPackerTrainer(HBDesignerTrainer):
                     n_workers=n_workers,
                     mode="reduce",
                 )
-                print("ran reduce/hydride!")
 
         elif c.pack_method == "pippack":
 

@@ -4,86 +4,25 @@
 
 HBDesigner is an algorithm that designs highly-connected hydrogen bonding networks that fit the requested design constraints onto an input protein backbone.
 
+## Installation
+
+HBDesigner can be installed using the provided `install_hbdesigner.sh` script. This requires the `mamba` package manager to make the python environment, but it can be readily adapted to use other virtual environments.
+
 ## Using HBDesigner
 
 A detailed guide for running HBDesigner on your protein(s) of interest can be found at `examples/README.md`, along with many example runscripts for common design scenarios.
 
-
-
 ## Repeating the training and validation experiments
 
-### Preprocessing the training dataset
+The preprocessed HBDesigner training dataset can be obtained here (TBD). For developers interested in replicating or extending this work, we provide details on preprocessing, training, and validation at `hbdesigner/scripts/README.md`.
 
-1. Obtain the [ProteinMPNN training dataset](https://github.com/dauparas/ProteinMPNN/tree/main/training)
+## License
 
-2. Generate assemblies and idealize sidechains
+The HBDesigner source code and model weights are provided under an MIT license (see `LICENSE` file). However, HBDesigner uses PyRosetta for minimization and scoring. PyRosetta requires a paid license for commercial use but is free for academic use. See [the PyRosetta docs](https://www.pyrosetta.org/home/licensing-pyrosetta) for details.
+
+## Citation
+
+If you find HBDesigner useful for your own work, please use the following citation:
 ```
-# Repeat this for split=train, valid, and test
-
-python preprocess_asmbs.py \
-    --data_dir /data/pdb_2021aug02 \
-    --out_dir /data/pdb_2021aug02/preprocessed \
-    --num_workers 32 \
-    --split test
+TBD
 ```
-This should take around 5-15 minutes for the full dataset, depending on how many workers (CPUs) you can provide.
-
-3. Extract hydrogen bonding networks from idealized assemblies
-
-This script is meant to be run on a "chunk" of about 1000 files, since it can take a few hours to process these.
-To preprocess the full dataset, run this for all 243 "chunks" of 1000 assemblies. This is easiest to run as a SLURM array job if possible:
-```
-
-#SBATCH -J curation
-#SBATCH -n 1
-#SBATCH --cpus-per-task=1
-#SBATCH --mem=16g
-#SBATCH -t 12:00:00
-#SBATCH --array=1-243
-
-source ~/.bashrc
-mamba activate hbdesigner
-
-python extract_hbnet.py \
-    --data_dir $/data/pdb_2021aug02/preprocessed \
-    --chunk $SLURM_ARRAY_TASK_ID \
-    --chunk_size 1000
-```
-Each "chunk" can take up to a few hours to complete.
-
-### Training the sequence design and packing models
-
-```
-# Sequence design model
-python train_hbdesigner.py --use_wandb
-# Packing model
-python train_hbpacker.py --use_wandb
-
-```
-Training can take up to 2 days to complete, depending on your GPU/CPU specs.
-
-
-### Evaluating the models
-
-```
-# Design + Packing evaluation
-python evaluate_hbdesigner.py \
-    --pack_config $pack_cfg \
-    --pack_ckpt $pack_ckpt \
-    --num_workers 8 \
-    --pack_method hbpacker \
-    --pack_min \
-    --design_config $design_cfg \
-    --design_ckpt $design_ckpt
-
-# Packing-only evaluation
-python evaluate_packer.py \
-    --pack_config $cfg \
-    --pack_ckpt $ckpt \
-    --num_workers 8 \
-    --pack_method hbpacker \
-    --pack_min
-
-```
-
-Validation takes a few seconds per batch. You must provide the config and ckpt files for each trained model.
