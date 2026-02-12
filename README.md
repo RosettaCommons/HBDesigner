@@ -6,7 +6,12 @@ HBDesigner is an algorithm that designs highly-connected hydrogen bonding networ
 
 ## Installation
 
-HBDesigner can be installed using the provided `install_hbdesigner.sh` script. This requires the `mamba` package manager to make the python environment, but it can be readily adapted to use other virtual environments.
+HBDesigner can be installed using the provided `install_hbdesigner.sh` script. This script requires the `mamba` package manager, but it can be readily adapted to use other package managers.
+```
+git clone https://github.com/Kuhlman-Lab/HBDesigner.git
+cd HBDesigner/
+sh install_hbdesigner.sh
+```
 
 ## Using HBDesigner
 

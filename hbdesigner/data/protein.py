@@ -541,11 +541,6 @@ class Protein:
         x_mask = self.aatype == rc.restype_num
         self.aatype[x_mask] = rc.restype_order["G"]
 
-    def set_designable_res(self, residues: List[int]) -> None:
-        """Sets designable res based on input list or array of res indices."""
-        self.designable_res = np.zeros_like(self.designable_res).astype(bool)
-        self.designable_res[residues] = True
-
     def set_neighbor_mask(self, dist: float = 5.0) -> None:
         """Sets nearest neighbor mask based on Cb distance (Angstrom) cutoff."""
         dmat = self._get_Cb_dmat()
@@ -670,55 +665,6 @@ class Protein:
             b_factors=np.take_along_axis(
                 np.zeros_like(self.atom27_mask), indices=res_idx[:, None], axis=0
             ),
-        )
-
-    def crop_contiguous(
-        self,
-        size: int = 64,
-        pad: bool = False,
-        mask: Optional[np.ndarray] = None,
-    ):
-        """Randomly selects a residue and the next size neighbors in seq dimension, discarding the others.
-
-        Args:
-            size (int, optional): Total size of crop. Defaults to 64.
-            pad (bool, optional): Whether to pad proteins too small to fit the crop
-                size. Defaults to False.
-            mask (np.ndarray, optional): Mask the specifies which residues can be
-                selected as seeds for the crop. Defaults to None.
-        Returns:
-            self.__class__: Cropped Protein object.
-        """
-
-        if self.n_res <= size:
-            # No-padding means just return as-is
-            if not pad:
-                return self
-            # Padding means we need to add empty residues
-            else:
-                return self.pad(size)
-        else:
-            protein = self
-
-            # Get the seed residue
-            rng = get_worker_rng()
-            raw_idx = np.arange(protein.residue_index.size)
-            seed_res = rng.choice(raw_idx[mask], size=1)[0]
-
-            # Check if crop will overflow length of the protein
-            overflow = (seed_res + size) - protein.n_res
-            if overflow > 0:
-                # If so, pad the protein
-                protein = protein.pad(protein.n_res + overflow)
-
-        return self.__class__(
-            atom27_xyz=protein.atom27_xyz[seed_res : seed_res + size],
-            aatype=protein.aatype[seed_res : seed_res + size],
-            atom27_mask=protein.atom27_mask[seed_res : seed_res + size],
-            residue_index=protein.residue_index[seed_res : seed_res + size],
-            chain_index=protein.chain_index[seed_res : seed_res + size],
-            b_factors=protein.b_factors[seed_res : seed_res + size],
-            hetatm_dict=self.hetatm_dict,
         )
 
     def pad(self, n: int = 128):
