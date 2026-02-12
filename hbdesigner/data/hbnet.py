@@ -804,7 +804,7 @@ def get_seq_cond(hbnet_res: np.ndarray) -> np.ndarray:
     return aatype_dist[None, :]
 
 
-def get_seq_cond_inf(hbnet_res: Sequence[str], omit_AA: Sequence[str] = None) -> np.ndarray:
+def get_seq_cond_inf(hbnet_res: Sequence[str], omit_AA: Sequence[str] = []) -> np.ndarray:
     """
     Generate a sequence conditioning vector for a given residue set.
 

@@ -4,8 +4,12 @@ import os
 import numpy as np
 from numpy.testing import assert_allclose
 
-from hbdesigner.data.protein import Protein, PDB_CHAIN_IDS
-from hbdesigner.data.hbnet import initialize_rosetta, get_guide_atom
+from hbdesigner.data.protein import Protein
+from hbdesigner.data import residue_constants as rc
+from hbdesigner.data.hbnet import (
+    initialize_rosetta, 
+    get_guide_atom, get_seq_cond_inf
+)
 from hbdesigner.inference.protein_ops import (
     extract_chains,
     get_core_mask,
@@ -17,7 +21,6 @@ from hbdesigner.inference.protein_ops import (
     symmetrize_output,
     get_network_res,
 )
-
 from test_data_utils import example_protein
 
 
@@ -167,9 +170,67 @@ def test_guide_atom(example_protein):
     guide_atom_xyz_noisy_2 = get_guide_atom(guide_atom_res, sigma=10.0)
     assert np.all(guide_atom_xyz_noisy != guide_atom_xyz_noisy_2)
 
+
+guide_seqs = [
+    ["X", "X", "X"], # No seq cond
+    ["R", "R", "T"], # Full seq cond
+    ["E", "H", "X"], # Partial seq cond
+    ["E|D", "H", "X"], # Ambiguous (either-or) seq cond
+    ["E|D|T", "H|K", "K"] # Mixed seq cond
+]
+x = 1 / 11. # Default ambiguous probability value (11 polar restypes)
+y = x / 3. # Adjusted ambiguous probability value for one of three residues
+seq_cond_values = [
+    {
+        "A": 0., "R": x, "N": x, "D": x, "C": 0., 
+        "Q": x, "E": x, "G": 0., "H": x, "I": 0., 
+        "L": 0., "K": x, "M": 0., "F": 0., "P": 0., 
+        "S": x, "T": x, "W": x, "Y": x, "V": 0., 
+    }, # No seq cond
+    {
+        "A": 0., "R": 2/3., "N": 0., "D": 0., "C": 0., 
+        "Q": 0., "E": 0., "G": 0., "H": 0., "I": 0., 
+        "L": 0., "K": 0., "M": 0., "F": 0., "P": 0., 
+        "S": 0., "T": 1/3., "W": 0., "Y": 0., "V": 0., 
+    }, # Full seq cond
+    {
+        "A": 0., "R": y, "N": y, "D": y, "C": 0., 
+        "Q": y, "E": y + (1/3.), "G": 0., "H": y + (1/3.), "I": 0., 
+        "L": 0., "K": y, "M": 0., "F": 0., "P": 0., 
+        "S": y, "T": y, "W": y, "Y": y, "V": 0., 
+    }, # Partial seq cond
+    {
+        "A": 0., "R": y, "N": y, "D": y + (1/6.), "C": 0., 
+        "Q": y, "E": y + (1/6.), "G": 0., "H": y + (1/3.), "I": 0., 
+        "L": 0., "K": y, "M": 0., "F": 0., "P": 0., 
+        "S": y, "T": y, "W": y, "Y": y, "V": 0., 
+    }, # Ambiguous (either-or) seq cond
+]
+
+@pytest.mark.parametrize("guide_seq,dist_values", zip(guide_seqs, seq_cond_values))
+def test_seq_cond(guide_seq, dist_values):
+    def get_expected_dist(dist_values):
+        expected_dist = np.zeros(rc.restype_num + 1) # [21]
+        for restype in rc.restypes:
+            expected_dist[rc.restype_order[restype]] = dist_values[restype]
+        return expected_dist
+    expected_dist = get_expected_dist(dist_values)
+    # Seq cond has a row for every residue, so we must aggregate it to check
+    seq_cond = get_seq_cond_inf(guide_seq) # [1, 21, 3]
+    seq_cond = np.squeeze(np.sum(seq_cond, axis=-1) / np.sum(seq_cond, axis=(1, 2))) # Renormalize
+    assert_allclose(np.sum(seq_cond), 1., atol=1e-3)
+    assert_allclose(seq_cond, expected_dist, atol=1e-5)
+
+    # Check that omit_AA moves prob mass from omitted restypes to others
+    omit_AA = ["N", "Q"]
+    seq_cond_omit_AA = get_seq_cond_inf(guide_seq, omit_AA=omit_AA)
+    seq_cond_omit_AA = np.squeeze(np.sum(seq_cond_omit_AA, axis=-1) / np.sum(seq_cond_omit_AA, axis=(1, 2))) # Renormalize
+    assert (seq_cond_omit_AA[rc.restype_order["N"]] == 0.) and  (seq_cond_omit_AA[rc.restype_order["Q"]] == 0.)
+    assert_allclose(np.sum(seq_cond_omit_AA), 1., atol=1e-3)
+
+
 # TODO symmetrize protein
 # TODO symmetry mask
-# TODO seq_cond_inf (different settings)
 # TODO run minimize
 # TODO run scoring
 
