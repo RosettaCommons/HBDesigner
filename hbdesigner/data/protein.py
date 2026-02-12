@@ -42,11 +42,6 @@ class Protein:
     # value.
     b_factors: np.ndarray  # [num_res, 27]
 
-    # Boolean representing whether a residue is "designable" or not. Designable
-    # doesn't necessary refer to the amino acid sequence; A residue is designable
-    # if it can be modified (e.g. packing the sidechain).
-    designable_res: np.ndarray  # [num_res]
-
     # Boolean representing which residue(s) are "neighbors" of each other. Used to narrow down search space.
     neighbor_mask: np.ndarray  # [num_res, num_res]
 
@@ -62,7 +57,6 @@ class Protein:
         residue_index: np.ndarray,
         chain_index: np.ndarray,
         b_factors: np.ndarray,
-        designable_res: Optional[np.ndarray] = None,
         neighbor_mask: Optional[np.ndarray] = None,
         hetatm_dict: Dict[str, np.ndarray] = {},
     ) -> None:
@@ -74,11 +68,6 @@ class Protein:
         self.chain_index = chain_index
         self.b_factors = b_factors
         self.hetatm_dict = hetatm_dict
-
-        if designable_res is None:
-            self.designable_res = np.ones_like(self.aatype).astype(bool)
-        else:
-            self.designable_res = designable_res
 
         if neighbor_mask is None:
             self.neighbor_mask = np.ones((self.aatype.size, self.aatype.size)).astype(
@@ -120,7 +109,6 @@ class Protein:
         assert self.residue_index.shape == (self.n_res,)
         assert self.chain_index.shape == (self.n_res,)
         assert self.b_factors.shape == (self.n_res, 27)
-        assert self.designable_res.shape == (self.n_res,)
         assert self.neighbor_mask.shape == (self.n_res, self.n_res)
 
         # Validate hetatm_dict if present.
