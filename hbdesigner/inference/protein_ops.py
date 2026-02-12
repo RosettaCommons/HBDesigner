@@ -120,6 +120,16 @@ def concat_proteins(p_all: List[Protein], sort: bool = True) -> Protein:
     Returns:
         Protein: A single Protein object containing all concatenated data.
     """
+    unique_chains = set()
+    for p in p_all:
+        for p_chain in np.unique(p.chain_index):
+            if p_chain in unique_chains:
+                raise ValueError(
+                    f"Duplicate chain index {PDB_CHAIN_IDS[p_chain]} found across concatenated proteins. Please ensure unique chain indices for each protein."
+                )
+            else:
+                unique_chains.add(p_chain)
+
     p = Protein(
         atom27_xyz=np.concatenate([p.atom27_xyz for p in p_all], axis=0),
         atom27_mask=np.concatenate([p.atom27_mask for p in p_all], axis=0),
@@ -297,7 +307,6 @@ def validate_chains(p: Protein, chains: str = None) -> Union[np.ndarray, None]:
     return design_mask
 
 
-
 def get_symmetry_mask(p: Protein, symm_chains: str = None) -> np.ndarray:
     """
     Calculate binary symmetry mask based on specified chain symmetries.
@@ -351,7 +360,7 @@ def get_symmetry_mask(p: Protein, symm_chains: str = None) -> np.ndarray:
     return symmetry_mask
 
 
-def extract_chains(p: Protein, sel_chains: str) -> Tuple[Protein, Protein]:
+def extract_chains(p: Protein, sel_chains: str = "") -> Tuple[Protein, Protein]:
     """
     Extracts the specified chains from the protein.
 
@@ -363,11 +372,12 @@ def extract_chains(p: Protein, sel_chains: str) -> Tuple[Protein, Protein]:
         Tuple[Protein, Protein]: A tuple containing:
             1) the protein with only the extracted chains and
             2) the protein with only the non-extracted chains.
-    """
+    """    
     p_chains = np.unique(p.chain_index)
     p_chains_str = [PDB_CHAIN_IDS[p_ch] for p_ch in p_chains]
     # Get numeric value for each sel chain
     sel_chains = sel_chains.split(",")
+    sel_chains = [sc.strip() for sc in sel_chains if sc.strip() != '']
     p_chain_sel = []
     for s_ch in sel_chains:
         s_ch_idx = PDB_CHAIN_IDS.index(s_ch)
@@ -383,6 +393,4 @@ def extract_chains(p: Protein, sel_chains: str) -> Tuple[Protein, Protein]:
     chain_mask = np.sum(p_chain_sel[:, None] == p.chain_index[None, :], axis=0) > 0
     p_used = deepcopy(p).mask(np.where(chain_mask)[0])
     p_unused = deepcopy(p).mask(np.where(~chain_mask)[0])
-
-    print(f"Extracted chain(s) {sel_chains} from PDB with chains {p_chains_str}")
     return p_used, p_unused

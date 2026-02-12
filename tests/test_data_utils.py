@@ -11,7 +11,7 @@ from hbdesigner.data.features import (
     calc_bb_dihedrals, 
     sincos_to_angle
 )
-from hbdesigner.data.hbnet import crop_by_distance
+from hbdesigner.data.hbnet import crop_by_distance, crop_around_network
 
 
 @pytest.fixture
@@ -163,3 +163,17 @@ def test_crop(example_protein):
     assert masked.n_res == 10
     # Residues are 1-indexed in Protein
     assert_allclose(masked.residue_index, keep_res + 1)
+
+    # crop_around_network should find the KNN of specified residues
+    net_pos = np.array([4, 29, 33])
+    k = 16
+    cropped, crop_idxs = crop_around_network(
+        protein, 
+        net_pos=net_pos, 
+        topk=k
+    )
+    assert cropped.n_res == k
+    assert len(crop_idxs) == k
+    for net_res in net_pos:
+        assert net_res + 1 in cropped.residue_index
+
