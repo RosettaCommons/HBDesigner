@@ -162,12 +162,11 @@ def get_hbdes_parser() -> FileArgumentParser:
         help="Option to symmetrize output networks for convenience. Specify symmetric chains as 'A,B;C,D' etc.",
     )
     parser.add_argument(
-        "--symm_method", 
+        "--symm_file", 
         type=str,
         required=False,
-        choices=["strict", "lazy"],
-        default="lazy",
-        help="Method for symmetrization. 'strict' will only return networks that are fully symmetric, while 'lazy' will return the original network if it is not symmetric but its symmetrized version passes all filters. Default is 'lazy'."
+        default=None,
+        help="Symmetry file to use for symmetrization. Only used for strict symmetry."
     )
     parser.add_argument(
         "--sel_chains",

@@ -482,6 +482,7 @@ class HBDesigner(nn.Module):
         aatype_batch: torch.Tensor,
         nll_mask: torch.Tensor,
         temp: float = 1.0,
+        symmetry_idx: torch.Tensor = None,
     ) -> torch.Tensor:
         # Uniform noise
         net_res_u = torch.rand(
@@ -494,8 +495,18 @@ class HBDesigner(nn.Module):
         # Mask out visible residues
         net_res_gumbel[nll_mask.bool()] = -torch.inf
 
+        # Symmetrize, if applicable
+        if symmetry_idx is not None:
+            net_res_gumbel_reduced = scatter(net_res_gumbel, symmetry_idx, dim=0, reduce="mean")
+            net_res_gumbel = net_res_gumbel_reduced[symmetry_idx]
+
         # Take max for each sample
         _, net_res_argmax = scatter_max(net_res_gumbel, aatype_batch, 0)  # [B, 1]
+
+        # Get indices of symmetry-mates too
+        if symmetry_idx is not None:
+            symm_idxs = symmetry_idx[net_res_argmax].squeeze(-1) # [B]
+            net_res_argmax = torch.where(symmetry_idx == symm_idxs[:, None])[1].unsqueeze(-1) # [B x symm_factor]
 
         # Squeeze the inputs
         net_res_logits = net_res_logits.squeeze(1)
@@ -527,6 +538,7 @@ class HBDesigner(nn.Module):
         self,
         seq_logits: torch.Tensor,
         temp: float = 1.0,
+        symmetry_idx: torch.Tensor = None,
     ) -> torch.Tensor:
         # Uniform noise
         seq_u = torch.rand(seq_logits.shape, device=seq_logits.device)  # [L, 21]
@@ -538,9 +550,14 @@ class HBDesigner(nn.Module):
         nonpolars = torch.tensor(rc.restype_non_hb_idx).to(seq_gumbel.device)
         seq_gumbel[:, nonpolars] = -torch.inf
 
+        # Symmetrize, if applicable
+        if symmetry_idx is not None:
+            seq_gumbel_reduced = scatter(seq_gumbel, symmetry_idx, dim=0, reduce="mean")
+            seq_gumbel = seq_gumbel_reduced[symmetry_idx]
+
         # Get argmax of last dim
         seq_argmax = torch.argmax(seq_gumbel, dim=-1)
-
+            
         # Collect pred seq prob
         res_mask = torch.tensor(
             [0, 1, 1, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 0, 0, 1, 1, 1, 1, 0, 0],
@@ -792,6 +809,9 @@ class HBDesigner(nn.Module):
         b.aatype_cond = b.aatype_cond / (torch.sum(b.aatype_cond, dim=-1, keepdim=True) + 1e-8)
         results_dict = {}
 
+        # Set up symmetry factor for masking
+        symm_factor = (b.symmetry_idx.numel()) // torch.unique(b.symmetry_idx).numel()
+
         # Define main function to embed and process the protein for each step
         def get_processed_node_embeddings(b, seq, cond_info):
             # Create initial embedding of protein nodes
@@ -876,6 +896,7 @@ class HBDesigner(nn.Module):
 
             # If graph is already done, don't decode its nodes
             net_res_mask = b.net_res_num > 0
+            net_res_mask_symm = torch.repeat_interleave(net_res_mask, symm_factor, dim=0)
 
             # Make res prediction
             net_res_logits = self.net_res_layer(protein_nodes)
@@ -888,21 +909,24 @@ class HBDesigner(nn.Module):
                 b.aatype_batch,
                 b.done_mask,
                 res_sample_temp,
+                b.symmetry_idx if b.symmetry_idx is not None else None,
             )
             net_res = net_res.squeeze(-1)
-            net_res = net_res[net_res_mask]
-            net_res_probs[net_res] = net_res_p[net_res_mask]
+            net_res = net_res[net_res_mask_symm]
+            net_res_probs[net_res] = net_res_p[net_res_mask_symm]
 
             # Make seq prediction
             seq_logits = self.seq_layer(protein_nodes[net_res])
 
             # For any samples w/seq cond, mask out all other logits to ensure correct aatype chosen
             aatypes_not_allowed = (b.aatype_cond <= 1e-4).to(bool)
-            seq_logits[aatypes_not_allowed[net_res_mask]] = -torch.inf
+            aatypes_not_allowed_symm = torch.repeat_interleave(aatypes_not_allowed, symm_factor, dim=0)
+            seq_logits[aatypes_not_allowed_symm[net_res_mask_symm]] = -torch.inf
 
             seq_pred, seq_p = self.sample_seq(
                 seq_logits,
                 seq_sample_temp,
+                b.symmetry_idx[net_res] if b.symmetry_idx is not None else None,
             )
 
             # Update seq and done_mask
@@ -911,7 +935,7 @@ class HBDesigner(nn.Module):
             seq_probs[net_res] = seq_p
 
             # One less res to predict
-            b.net_res_num -= 1  # only 1 if asymmetric
+            b.net_res_num -= symm_factor
             b.net_res_num = torch.clamp(b.net_res_num, min=0)
 
             # Update res-to-predict vector for each graph

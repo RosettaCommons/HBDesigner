@@ -196,6 +196,11 @@ class HBPackerDataset(HBDesignerDataset):
             [(batch.aatype_batch == j).sum() for j in range(batch.num_graphs)],
         )  # [B,]
 
+        # Need to increment symmetry idx by protein length
+        if hasattr(batch, "symmetry_idx"):
+            for i, ptr in enumerate(batch.ptr[:-1]):
+                batch.symmetry_idx[ptr:batch.ptr[i+1]] += ptr
+
         # Get remaining res per set
         batch.net_res_num = torch.tensor(
             [
@@ -288,6 +293,7 @@ class HBPackerDataset(HBDesignerDataset):
         hbnet_pos: np.ndarray,
         hbnet_res: np.ndarray,
         pack_crop: float = 10.0,
+        symmetry_idx: np.ndarray = None,
     ) -> gd.Data:
         """
         Featurize Protein for HBPacker inference. Unlike for training, we have no ground truth sidechains here.
@@ -297,6 +303,7 @@ class HBPackerDataset(HBDesignerDataset):
             hbnet_pos (np.ndarray): Array of positions for inclusion in predicted network.
             hbnet_res (np.ndarray): Array of residues for inclusion in predicted network.
             pack_crop (float): Distance in Angstroms to crop the protein around the network. Default is 10.0.
+            symmetry_idx (np.ndarray): Optional array of symmetry indices for each residue, used for strict symmetric packing. Default is None.
 
         Returns:
             gd.Data: torch_geometric Data object with featurized protein.
@@ -307,7 +314,7 @@ class HBPackerDataset(HBDesignerDataset):
 
         # Crop before featurizing
         if pack_crop > 0.:
-            p, knn = crop_by_distance(p, hbnet_pos, pack_crop)
+            p, knn = crop_by_distance(p, hbnet_pos, pack_crop, symmetry_idx=symmetry_idx)
             hbnet_pos = np.where(p.aatype != rc.restype_num)[0]
         else:
             knn = np.arange(p.n_res)
@@ -331,6 +338,10 @@ class HBPackerDataset(HBDesignerDataset):
         atom14_xyz[hbnet_pos] = atom14_xyz_sc[hbnet_pos]
         atom14_mask[hbnet_pos] = atom14_mask_sc[hbnet_pos]
 
+        symmetry_idx = np.arange(p.n_res) if symmetry_idx is None else symmetry_idx
+        symmetry_idx = symmetry_idx[knn]
+        symmetry_idx = symmetry_idx[hbnet_pos]
+
         # Create the Data object
         protein_data = gd.Data(
             num_nodes=aatype.shape[0],
@@ -347,6 +358,7 @@ class HBPackerDataset(HBDesignerDataset):
                 torch.float32
             ),  # [L, 4]
             pack_knn=torch.from_numpy(knn).to(torch.long),  # [K]
+            symmetry_idx=torch.from_numpy(symmetry_idx).to(torch.long),  # [R]
         )
 
         # chi mask is mask of packable positions

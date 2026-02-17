@@ -97,7 +97,7 @@ def get_satisfaction(
 
     for i in range(1, pose.total_residue() + 1):
         # Get only network res
-        if seq[i - 1] != "G":
+        if seq[i - 1] not in "XG":
             res = pose.residue(i)
             # Iterate over heavy atoms in side chain
             for a_idx in range(1, res.nheavyatoms() + 1):
@@ -960,7 +960,7 @@ def crop_around_network(p: Protein, net_pos: np.ndarray, topk: int = 32) -> Tupl
     return p.mask(knn), knn
 
 
-def crop_by_distance(p: Protein, net_pos: np.ndarray, d: float = 5.0) -> Tuple[Protein, np.ndarray]:
+def crop_by_distance(p: Protein, net_pos: np.ndarray, d: float = 5.0, symmetry_idx: np.ndarray = None) -> Tuple[Protein, np.ndarray]:
     """
     Crop by keeping only residues within a certain distance of the network residues.
 
@@ -968,6 +968,8 @@ def crop_by_distance(p: Protein, net_pos: np.ndarray, d: float = 5.0) -> Tuple[P
         p (Protein): Input Protein scaffold.
         net_pos (np.ndarray): Array of network positions for indexing.
         d (float): Cb distance cutoff, in Angstrom. Defaults is 5.0.
+        symmetry_idx (np.ndarray): Optional array of shape [L] indicating which residues are symmetric with each other. 
+        If provided, distance will be calculated to the nearest symmetric copy of each network residue.
 
     Returns:
         Protein: Cropped Protein output.
@@ -978,6 +980,11 @@ def crop_by_distance(p: Protein, net_pos: np.ndarray, d: float = 5.0) -> Tuple[P
     p.set_neighbor_mask(d)
     net_neighbors = np.sum(p.neighbor_mask[net_pos, :], axis=0) > 0 # [L]
     net_neighbors = np.where(net_neighbors)[0]
+
+    if symmetry_idx is not None:
+        # If symmetry idx provided, need to add in any missing res that are symmetric with the neighbors we have
+        symm_values = symmetry_idx[net_neighbors]
+        net_neighbors = np.where(np.isin(symmetry_idx, symm_values))[0]
 
     # Crop scaffold down to just this region
     return p.mask(net_neighbors), net_neighbors

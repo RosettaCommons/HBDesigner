@@ -508,6 +508,11 @@ class HBDesignerDataset(torch.utils.data.IterableDataset):
             [(batch.aatype_batch == j).sum() for j in range(batch.num_graphs)],
         )  # [B,]
 
+        # Need to increment symmetry idx by protein length
+        if hasattr(batch, "symmetry_idx"):
+            for i, ptr in enumerate(batch.ptr[:-1]):
+                batch.symmetry_idx[ptr:batch.ptr[i+1]] += ptr
+                
         # Get remaining res per set
         batch.net_res_num = torch.tensor(
             [
@@ -528,6 +533,7 @@ class HBDesignerDataset(torch.utils.data.IterableDataset):
         min_burial: float = 0.0,
         fixed_res: np.ndarray = None,
         omit_AA: Sequence[str] = None,
+        symmetry_idx: np.ndarray = None,
     ) -> gd.Data:
         """
         Featurize Protein for HBDesigner inference. Unlike for training, we have no ground truth network here.
@@ -542,6 +548,7 @@ class HBDesignerDataset(torch.utils.data.IterableDataset):
             min_burial (float): Minimum burial value to allow designable. Default is 0.0. Core is 5.2, Surface is 2.0.
             fixed_res (np.ndarray): Array of positions that are already present in the network. Default is None (no fixed residues).
             omit_AA (Sequence[str]): List of amino acid single-letter codes to omit from designs. Default is None (no omissions).
+            symmetry_idx (np.ndarray): Array of symmetry indices for each residue, where residues with the same index are symmetric. Default is None (no symmetry).
 
         Returns:
             gd.Data: torch_geometric Data object with featurized protein.
@@ -576,6 +583,7 @@ class HBDesignerDataset(torch.utils.data.IterableDataset):
             residue_index=torch.from_numpy(residue_index).to(torch.int32),  # [L]
             chain_index=torch.from_numpy(chain_index).to(torch.int32),  # [L]
             bb_dihedral=torch.from_numpy(bb_dihedral).to(torch.float32),  # [L, 3]
+            symmetry_idx=torch.from_numpy(symmetry_idx).to(torch.long) # [L]
         )
 
         # nll_mask is 1 for designable positions, 0 otherwise

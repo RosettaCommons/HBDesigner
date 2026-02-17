@@ -33,6 +33,7 @@ from hbdesigner.inference.protein_ops import (
     concat_proteins,
     symmetrize_output,
     get_network_res,
+    get_symmetry_idx,
 )
 from hbdesigner.inference.packing import (
     pack_and_score_network,
@@ -59,11 +60,13 @@ class InferenceDataset(torch.utils.data.IterableDataset):
         preds: List[Dict[str, Any]],
         batch_size: int,
         pack_crop: float,
+        symmetry_idx: np.ndarray = None,
     ):
         self.scaffold = scaffold
         self.preds = preds
         self.batch_size = batch_size
         self.pack_crop = pack_crop
+        self.symmetry_idx = symmetry_idx
         self.start, self.end = 0, len(self.preds)
 
     def __len__(self):
@@ -108,6 +111,7 @@ class InferenceDataset(torch.utils.data.IterableDataset):
                     np.array(p["net_res"]),
                     np.array(p["seq"]),
                     pack_crop=self.pack_crop,
+                    symmetry_idx=self.symmetry_idx,
                 )
             except IndexError:
                 sample = samples[-1]
@@ -144,6 +148,24 @@ class HBDesRunner:
         assert 1 <= self.opts.n_workers, (
             f"ERROR: Invalid number of workers {self.opts.n_workers} provided. --n_workers must be >=1."
         )
+
+        if (self.opts.symm_file is not None):
+            assert os.path.isfile(self.opts.symm_file), (
+                f"ERROR: Invalid symmetry definition file {self.opts.symm_file} provided."
+            )
+            assert self.opts.symm_chains is not None, (
+                f"ERROR: --symm_chains must be specified if --symm_file is provided."
+            )
+            assert len(self.opts.symm_chains.split(",")) >= 2, (
+                f"ERROR: At least two chains must be included in --symm_chains for symmetry to be applied."
+            )
+            assert ";" not in self.opts.symm_chains, (
+                f"ERROR: Strict symmetry can only be applied to a single symmetry constraint (e.g., A,B but not A,B;C,D)."
+            )
+            n_chains = len(self.opts.symm_chains.split(","))
+            assert self.opts.n_res % n_chains == 0, (
+                f"ERROR: Number of designed residues ({self.opts.n_res}) must be divisible by the number of symmetric chains ({n_chains})."
+            )
 
         # Sampling params
         assert 0 < self.opts.n_samples, (
@@ -257,6 +279,10 @@ class HBDesRunner:
                     self.scaffold, self.opts.sel_chains
                 )
             symmetry_mask = get_symmetry_mask(self.scaffold, self.opts.symm_chains)
+            if self.opts.symm_file is not None:
+                symmetry_idx = get_symmetry_idx(symmetry_mask)
+            else:
+                symmetry_idx = np.arange(self.scaffold.n_res)
 
             if self.opts.guide_res is not None:
                 guide_res = validate_residues(self.scaffold, self.opts.guide_res, mode="guide")
@@ -289,7 +315,7 @@ class HBDesRunner:
 
         # 3. Generate design sequences
         ttime = time.time()
-        samples = self.sample_from_hbdesigner(design_model, design_mask, guide_res, fixed_res)
+        samples = self.sample_from_hbdesigner(design_model, design_mask, guide_res, fixed_res, symmetry_idx=symmetry_idx)
         n_samples = len(samples)
         print(
             f"Finished generating {n_samples} unique samples with HBDesigner in {time.time() - ttime:.3f} sec"
@@ -297,7 +323,7 @@ class HBDesRunner:
 
         # 4. Pack and score sequences
         ttime = time.time()
-        results = self.pack_samples(samples=samples, model=packing_model)
+        results = self.pack_samples(samples=samples, model=packing_model, symmetry_idx=symmetry_idx, symm_file=self.opts.symm_file)
         print(
             f"Finished packing/scoring {n_samples} samples with {self.opts.packer} in {time.time() - ttime:.3f} sec"
         )
@@ -363,7 +389,8 @@ class HBDesRunner:
         rows = np.arange(df.shape[0])
 
         # Symmetrization is slow, so we parallelize it if we can
-        if symmetry_mask is not None:
+        if (symmetry_mask is not None) and (self.opts.symm_file is None):
+            # Only used for lazy symmetry
             with Pool(self.opts.n_workers) as p:
                 result = p.map(
                     partial(
@@ -371,7 +398,6 @@ class HBDesRunner:
                         df=df,
                         symm_mask=symmetry_mask,
                         clash_thresh=3.0,
-                        symmetry_method=self.opts.symm_method
                     ),
                     rows,
                 )
@@ -505,6 +531,8 @@ class HBDesRunner:
         self,
         samples: List[Dict[str, List[int]]],
         model: Union[torch.nn.Module, None],
+        symmetry_idx: np.ndarray = None,
+        symm_file: str = None,
     ):
         """
         Route the samples to the correct packing method and return results.
@@ -528,6 +556,8 @@ class HBDesRunner:
                 samples=samples,
                 core_mask=core_mask,
                 model=model,
+                symmetry_idx=symmetry_idx,
+                symm_file=symm_file,
             )
         elif self.opts.packer == "pippack":
             results = self.pack_with_pippack(
@@ -597,6 +627,8 @@ class HBDesRunner:
         samples: List[Dict[str, Any]],
         model: HBDesigner,
         core_mask: np.ndarray = None,
+        symmetry_idx: np.ndarray = None,
+        symm_file: str = None,
     ) -> Dict[str, Any]:
         """
         Use HBPacker to pack a list of predictions.
@@ -605,6 +637,8 @@ class HBDesRunner:
             samples (List[Dict[str, Any]]): List of samples to pack.
             model (HBDesigner): Loaded HBDesigner model for packing.
             core_mask (np.ndarray): Core mask for the scaffold.
+            symmetry_idx (np.ndarray): Symmetry index for the scaffold, if applicable.
+            symm_file (str): Path to symmetry definition file, if using strict symmetry.
 
         Returns:
             Dict[str, Any]: Packed results with scores.
@@ -617,7 +651,7 @@ class HBDesRunner:
         t0 = time.time()
         # Configure DataLoader to take advantage of multiprocessing
         ds = InferenceDataset(
-            deepcopy(self.scaffold), samples, batch_size, self.opts.pack_crop
+            deepcopy(self.scaffold), samples, batch_size, self.opts.pack_crop, symmetry_idx=symmetry_idx,
         )
         dl = torch.utils.data.DataLoader(
             ds,
@@ -654,6 +688,7 @@ class HBDesRunner:
                     scaffold=deepcopy(self.scaffold),
                     minimize=True,
                     core_mask=core_mask,
+                    symm_file=symm_file,
                 ),
                 all_packs,
             )
@@ -828,6 +863,7 @@ class HBDesRunner:
         passed = {}
         for i, r in enumerate(results):
             if r is not None:
+                print(r)
                 if (
                     (r["buried_heavy_unsats"] <= self.opts.max_BUNs)
                     and (r["n_chains"] == total_chains)
@@ -848,6 +884,7 @@ class HBDesRunner:
         design_mask: np.ndarray,
         guide_res: np.ndarray = None,
         fixed_res: np.ndarray = None,
+        symmetry_idx: np.ndarray = None,
     ) -> List[Dict[str, List[int]]]:
         """
         Generate n_samples samples from HBDesigner model.
@@ -857,9 +894,9 @@ class HBDesRunner:
             design_mask (np.ndarray): Boolean mask indicating designable positions.
             guide_res (np.ndarray, optional): Guide residues for triangulating virtual guide atom.
             fixed_res (np.ndarray, optional): Fixed residues that are already present in the network.
+            symmetry_idx (np.ndarray, optional): Index array indicating symmetric positions in the scaffold.
         Returns:
             List[Dict[str, List[int]]]: List of unique predictions from the model.
-
         """
         # Only need to featurize once
         data = HBDesignerDataset.featurize_inference(
@@ -872,6 +909,7 @@ class HBDesRunner:
             fixed_res=fixed_res,
             design_mask=design_mask,
             omit_AA=self.opts.omit_AA,
+            symmetry_idx=symmetry_idx,
         )
 
         # Check there are enough designable positions

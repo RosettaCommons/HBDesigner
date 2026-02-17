@@ -907,6 +907,7 @@ class HBPacker(nn.Module):
                 )
             return protein_nodes
 
+        symm_factor = b.symmetry_idx.numel() // torch.unique(b.symmetry_idx).numel()
         # Make predictions until model predicts each example is done.
         for _ in range(n_recycles + 1):
             protein_nodes = get_processed_node_embeddings(
@@ -925,6 +926,11 @@ class HBPacker(nn.Module):
                 -1, 4, 2
             )  # [L, 4, 2]
             chi_preds_norm = normalize_chi(chi_preds_unnorm)
+
+            # Symmetrize, if applicable
+            if symm_factor > 1:
+                chi_preds_norm_reduced = scatter(chi_preds_norm, b.symmetry_idx, dim=0, reduce="mean")
+                chi_preds_norm = chi_preds_norm_reduced[b.symmetry_idx]
 
             # Build sidechain coords now
             aatype = b.aatype[chi_res_to_pred_i]

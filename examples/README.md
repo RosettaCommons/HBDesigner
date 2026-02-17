@@ -12,11 +12,10 @@ If provided with an interface, HBDesigner will automatically try to design a net
 - One-sided: `interface/one_sided`
 
 ## Symmetric Design:
-HBDesigner supports limited symmetry awareness with two different approaches: "strict" and "lazy" symmetry. "Strict" symmetry explicitly designs symmetric networks where all symmetric residues must contribute to the network. "Lazy" symmetry designs asymmetric networks, then tries to symmetrize them across any symmetric chains. The former is more useful for homomers where symmetric residues are in direct contact, while the latter is useful for homomers where symmetric residues are more distal from one another.
+HBDesigner has limited support for symmetric design across protein-protein interfaces. To do this, we offer two complementary approaches: "lazy" and "strict" symmetry. "Lazy" symmetry designs asymmetric networks, then tries to symmetrize them across any symmetric chains. This is useful for cases where you don't care if your network itself is symmetric, just that you preserve sequence symmetry across the interface. Lazy symmetry can be run on Cn symmetric assemblies for networks of any size. "Strict" symmetry explicitly designs symmetric networks where all symmetric residues must contribute to the network and interact with symmetric copies of themselves. This is difficult to satisfy unless the designable residues are oriented very close to the plane of symmetry. Strict symmetry for N-wise symmetry must be given a `--n_res` that is divisible by N (e.g., if designing a homotrimer, `--n_res` can be `3,6,etc.`). Symmetric design is still experimental and has not been validated when used in combination with conditioning features.
 
 - Lazy: `interface/symm_lazy`
 - Strict: `interface/symm_strict`
-
 
 ## Sequence Conditioning
 We can use sequence conditioning to specify which amino acid(s) are used, including partial or ambiguous (e.g., "Either ASN or GLN") specifications. This is specified with a comma-separated list of amino acid groups, as shown below.

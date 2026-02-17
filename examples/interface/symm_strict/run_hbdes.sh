@@ -10,14 +10,19 @@
 #SBATCH --qos gpu_access
 #SBATCH --gres=gpu:1
 
+
 source ~/.bashrc
+module load gcc
 conda activate hbdesigner
 
+# Make symmetry file
+# ${ROSETTA}/main/source/src/apps/public/symmetry/make_symmdef_file.pl  -r 12 -m NCS -p 5J0K_clean.pdb > 5J0K.symm
+
 run_hbdesigner \
-    --pdb 6MSR.pdb \
+    --pdb 5J0K_clean_symm.pdb \
     --n_workers 8 \
     --n_samples 200 \
-    --n_res 3 \
+    --n_res 5 \
     --top_k 5 \
-    --symm_chains A,B,C \
-    --symm_method strict
+    --symm_chains A,B \
+    --symm_file 5J0K.symm

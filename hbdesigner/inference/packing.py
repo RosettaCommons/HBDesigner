@@ -10,7 +10,7 @@ from hbdesigner.data.hbnet import crop_by_distance, get_satisfaction
 from hbdesigner.data.protein import Protein
 from hbdesigner.inference.protein_ops import get_network_res
 from pyrosetta import Pose, get_fa_scorefxn
-from pyrosetta.rosetta.basic.options import get_real_option, set_real_option
+from pyrosetta.rosetta.basic.options import get_real_option, set_real_option, set_string_option
 from pyrosetta.rosetta.core.import_pose import pose_from_pdbstring
 from pyrosetta.rosetta.core.kinematics import MoveMap
 from pyrosetta.rosetta.core.pack.task import TaskFactory, operation
@@ -38,6 +38,7 @@ def minimize_and_score_network(
     minimize: bool = True,
     core_mask: np.ndarray = None,
     max_BUNs: int = 0,
+    symm_file: str = None,
 ):
     """
     Minimize and score a packed network using PyRosetta.
@@ -48,6 +49,7 @@ def minimize_and_score_network(
         minimize (bool): Whether to minimize the pose after packing. Default is True.
         core_mask (np.ndarray): Mask indicating core residues in the scaffold.
         max_BUNs (int): Maximum number of buried unsatisfied heavy polar atoms allowed. Default is 0.
+        symm_file (str): Path to symmetry definition file, if using strict symmetry. Default is None.
 
     Returns:
         Dict[str, Any]: A dictionary containing scores and the packed protein.
@@ -75,9 +77,28 @@ def minimize_and_score_network(
         core_mask = core_mask[pack_knn]
 
     # Import into PyRosetta
-    pose = Pose()
-    pdbstr = scaffold.to_pdb(unk_to_gly=True)
-    pose_from_pdbstring(pose, pdbstr)
+    if symm_file is None:
+        pose = Pose()
+        pdbstr = scaffold.to_pdb(unk_to_gly=True)
+        pose_from_pdbstring(pose, pdbstr)
+
+    else:
+        pose = Pose()
+        # Reduce Scaffold to a monomer so symmetry mover can rebuild it
+        scaffold = scaffold.mask(np.where(scaffold.chain_index == 0)[0])
+        pdbstr = scaffold.to_pdb(unk_to_gly=True)
+        pose_from_pdbstring(pose, pdbstr)
+        symm_mover = pyrosetta.rosetta.protocols.symmetry.SetupForSymmetryMover(symm_file)
+        symm_mover.apply(pose)
+
+        # Need to update core mask for virtual residues
+        core_mask_new = []
+        for i, aa in enumerate(pose.sequence()):
+            if aa == "X":
+                core_mask_new.append(0)
+            else:
+                core_mask_new.append(core_mask[i % len(core_mask)])
+        core_mask = np.array(core_mask_new)
 
     # Run quick-and-dirty connectivity check before expensive minimization
     default_energy = get_real_option("score:hb_max_energy")
@@ -98,11 +119,11 @@ def minimize_and_score_network(
         return None
 
     # Run energy scoring vs polyG backbone
-    scores = score_network(pose, deepcopy(scaffold))
+    scores = score_network(pose, deepcopy(scaffold), symm_file=symm_file)
     # Run satisfaction/BUNs scoring
     scores.update(get_satisfaction(pose, core_mask))
 
-    net_res = [i for i, aa in enumerate(pose.sequence()) if aa != "G"]
+    net_res = [i for i, aa in enumerate(pose.sequence()) if aa not in "XG"]
     n_core_res = np.sum(core_mask[net_res])
 
     # Convert pose to Protein so we can return it
@@ -118,7 +139,6 @@ def minimize_and_score_network(
     full_scaffold.aatype[pack_knn] = protein.aatype
 
     protein = deepcopy(full_scaffold)
-
     net_string = get_network_res(protein)
     n_chains = len(set([ns[0] for ns in net_string.split(":")]))
 
@@ -132,6 +152,7 @@ def minimize_and_score_network(
             "n_core_res": n_core_res,
         }
     )
+    print(scores)
     return scores
 
 
@@ -276,7 +297,7 @@ def pack_network(
         movemap.set_bb(False)
         movemap.set_jump(False)
         for res in range(1, pose.total_residue() + 1):
-            if pose.residue(res).name3() not in ["ALA", "GLY"]:
+            if pose.residue(res).name3() not in ["ALA", "GLY", "XXX", "VRT"]:
                 movemap.set_chi(res, True)
                 # Cart min uses extra DOFs
                 if cartesian:
@@ -346,7 +367,7 @@ def minimize_network(pose: Pose, cartesian: bool = True) -> Pose:
     movemap.set_bb(False)
     movemap.set_jump(False)
     for res in range(1, pose.total_residue() + 1):
-        if pose.residue(res).name3() not in ["ALA", "GLY"]:
+        if pose.residue(res).name3() not in ["ALA", "GLY", "XXX"]:
             movemap.set_chi(res, True)
 
             if cartesian:
@@ -381,7 +402,7 @@ def minimize_network(pose: Pose, cartesian: bool = True) -> Pose:
     return pose
 
 
-def score_network(pose: Pose, scaffold: Protein) -> Dict[str, float]:
+def score_network(pose: Pose, scaffold: Protein, symm_file: str = None) -> Dict[str, float]:
     """
     Score a Pose for network energy and burial.
 
@@ -399,6 +420,11 @@ def score_network(pose: Pose, scaffold: Protein) -> Dict[str, float]:
     polyG_pose = Pose()
     scaffold.clear_sequence()
     pose_from_pdbstring(polyG_pose, scaffold.to_pdb(unk_to_gly=True))
+    # Need to enable symmetry for polyG as well
+    if symm_file is not None:
+        symm_mover = pyrosetta.rosetta.protocols.symmetry.SetupForSymmetryMover(symm_file)
+        symm_mover.apply(polyG_pose)
+
     seq, seq_polyG = pose.sequence(), polyG_pose.sequence()
     net_idx = [i for i, (s, sg) in enumerate(zip(seq, seq_polyG)) if s != sg]
     n_res = len(net_idx)
@@ -455,7 +481,7 @@ def check_valid_network(pose: Pose) -> bool:
     # Every non-GLY should have an hbond
     for i in range(1, pose.total_residue() + 1):
         rname3 = pose.residue(i).name()[:3]
-        if rname3 != "GLY" and rname3 != "VRT":
+        if rname3 not in ["GLY", "VRT", "XXX"]:
             if i not in hb_res:
                 return False
 
