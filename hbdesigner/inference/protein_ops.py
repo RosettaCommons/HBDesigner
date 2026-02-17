@@ -4,8 +4,9 @@ from typing import List, Tuple, Union
 from copy import deepcopy
 import numpy as np
 import pandas as pd
-import pyrosetta
+import torch
 
+import pyrosetta
 from pyrosetta import Pose
 from pyrosetta.rosetta.core.import_pose import pose_from_pdbstring
 from pyrosetta.rosetta.core.select.residue_selector import LayerSelector
@@ -21,6 +22,7 @@ def symmetrize_output(
     df: pd.DataFrame,
     symm_mask: np.ndarray,
     clash_thresh: float = 3.0,
+    symmetry_method: str = "lazy",
 ) -> pd.core.series.Series:
     """
     Symmetrizes a packed network using the provided symmetry mask and network information.
@@ -31,6 +33,8 @@ def symmetrize_output(
         df (pd.DataFrame): The DataFrame containing network information.
         symm_mask (np.ndarray): A binary mask indicating symmetry mates.
         clash_thresh (float): The distance threshold, in Angstrom, for detecting clashes.
+        symmetry_method (str): The method for symmetrization. 'strict' will only return networks that are fully symmetric, 
+        while 'lazy' will return the original network if it is not symmetric but its symmetrized version passes all filters.
 
     Returns:
         pd.core.series.Series: The updated DataFrame row with the symmetrized network.
@@ -42,71 +46,80 @@ def symmetrize_output(
     net_mask = p.aatype != rc.restype_order["G"]
     net_res = np.where(net_mask)[0]
     n_res_asym = net_res.size
+    symm_factor = np.sum(symm_mask, axis=0)[0]
 
-    for nr in net_res:
-        # Copy aatype to symmetry-mates
-        symm_mates = np.where(symm_mask[nr])[0]
-        p.aatype[symm_mates] = p.aatype[nr]
+    if symmetry_method == "strict":
+        # Check if network is already perfectly symmetric
+        if np.unique(p.residue_index[net_res]).size == 1 and np.all(p.aatype[net_res] == p.aatype[net_res][0]):
+            print("Found perfectly symmetric network. Returning network as-is.")
+            return net
+        else:
+            return None
+    elif symmetry_method == "lazy":
+        # For each network residue, use alignment to copy sidechain and H atom positions to its symmetry mates
+        for nr in net_res:
+            # Calculate alignment to each symmetry-mate
+            symm_mates = np.where(symm_mask[nr])[0]
+            nr_bb_xyz = p.atom27_xyz[nr, :4].copy()
+            nr_com = np.mean(nr_bb_xyz, axis=0) # [3]
+            net_res_bb_xyz_centered = nr_bb_xyz - nr_com[None] # [4, 3]
+            symm_mates = [sm for sm in symm_mates if sm not in net_res]
+            if len(symm_mates) != symm_factor - 1:
+                print("Found quasi-symmetric network while symmetrizing. Discarding network.")
+                return None
 
-        # Collect network chi angles
-        sc_dihedrals, sc_dihedral_mask = calc_sc_dihedrals(
-            p.atom27_xyz[nr], np.array(p.aatype[nr]), return_mask=True
-        )
-        sc_dihedrals = np.tile(sc_dihedrals, (symm_mates.size, 1))
-        sc_dihedral_mask = np.tile(sc_dihedral_mask, (symm_mates.size, 1))
+            for sm in symm_mates:
+                sm_xyz = p.atom27_xyz[sm, :4].copy() # [4, 3]
+                sm_com = np.mean(sm_xyz, axis=0) # [3]
+                sm_xyz_centered = sm_xyz - sm_com[None] # [4, 3]
+                # Want to align P to Q
+                P = net_res_bb_xyz_centered
+                Q = sm_xyz_centered
+                R = compute_Kabsch_R(P, Q)
+                # Apply alignment to all atoms in the residue
+                sm_xyz_all = p.atom27_xyz[nr].copy() # [27, 3]
 
-        # Apply chi angles to symmetry mates
-        bb_xyz = p.atom27_xyz[symm_mates, :4]
-        sc_xyz, sc_mask = build_sc_from_chi(
-            bb_xyz, p.aatype[symm_mates], sc_dihedrals, sc_dihedral_mask
-        )
-        p.atom27_xyz[symm_mates, :14], p.atom27_mask[symm_mates, :14] = sc_xyz, sc_mask
+                # Need to get proper COM adjustments
+                sm_xyz_all = (sm_xyz_all - nr_com[None]) @ R.T + sm_com[None]
+                p.atom27_xyz[sm] = sm_xyz_all
+                p.atom27_mask[sm] = p.atom27_mask[nr].copy()
+                p.aatype[sm] = p.aatype[nr]
 
-    # Import back into Rosetta to optimize missing hydrogens
-    p.atom27_xyz[:, 14:] = 0.0
-    p.atom27_mask[:, 14:] = 0.0
-    pose = Pose()
-    pdbstr = p.to_pdb(unk_to_gly=True)
-    pose_from_pdbstring(pose, pdbstr)
+        # Check for clashes between symmetry-mates
+        symm_mate_res = np.where(p.aatype != rc.restype_order["G"])[0]
+        symm_mate_res = np.setdiff1d(symm_mate_res, net_res)
+        
+        # If network picks overlapping residues on different chains, it can fail to symmetrize
+        if (n_res_asym != symm_mate_res.size):
+            print("Found quasi-symmetric network while symmetrizing. Discarding network.")
+            return None
 
-    buffer = pyrosetta.rosetta.std.stringbuf()
-    pose.dump_pdb(pyrosetta.rosetta.std.ostream(buffer))
-    pdb_block = buffer.str()
-    p = Protein.from_pdb_string(pdb_block, discard_Hs=False)
+        net_res_xyz = np.reshape(p.atom27_xyz[net_res, 4:14], (-1, 3))  # [N, 3]
+        symm_mate_xyz = np.reshape(p.atom27_xyz[symm_mate_res, 4:14], (-1, 3))  # [N, 3]
+        net_res_mask = np.reshape(p.atom27_mask[net_res, 4:14], (-1, 1))
+        pair_dists = cdist(net_res_xyz, symm_mate_xyz)  # [N, N]
+        pair_masks = net_res_mask * np.transpose(net_res_mask)  # [N, N]
+        clashes = (pair_dists < clash_thresh) * pair_masks
+        n_clashes = np.sum(clashes)
 
-    # Check for clashes between symmetry-mates
-    symm_mate_res = np.where(p.aatype != rc.restype_order["G"])[0]
-    symm_mate_res = np.setdiff1d(symm_mate_res, net_res)
-    
-    # If network picks overlapping residues on different chains, it can fail to symmetrize
-    if (n_res_asym != symm_mate_res.size):
-        print("Found quasi-symmetric network before symmetrization. Returning un-symmetrized network.")
-        return None
-
-    net_res_xyz = np.reshape(p.atom27_xyz[net_res, 4:14], (-1, 3))  # [N, 3]
-    symm_mate_xyz = np.reshape(p.atom27_xyz[symm_mate_res, 4:14], (-1, 3))  # [N, 3]
-    net_res_mask = np.reshape(p.atom27_mask[net_res, 4:14], (-1, 1))
-    pair_dists = cdist(net_res_xyz, symm_mate_xyz)  # [N, N]
-    pair_masks = net_res_mask * np.transpose(net_res_mask)  # [N, N]
-    clashes = (pair_dists < clash_thresh) * pair_masks
-    n_clashes = np.sum(clashes)
-
-    if n_clashes > 0:
-        print("Found clash while symmetrizing. Returning un-symmetrized network.")
-        return None
+        if n_clashes > 0:
+            print("Found clash while symmetrizing. Discarding network.")
+            return None
+        else:
+            net.protein = p
+            # Update metadata and scores to be symmetry-aware
+            net.network = get_network_res(p)
+            
+            for score in [
+                "buried_heavy_unsats",
+                "buried_unsat_Hpol",
+                "HB_Score_full",
+                "HB_Score_hb",
+            ]:
+                net[score] *= symm_factor
+            return net
     else:
-        net.protein = p
-        # Update metadata and scores to be symmetry-aware
-        net.network = get_network_res(p)
-        symm_factor = np.sum(symm_mask, axis=0)[0]
-        for score in [
-            "buried_heavy_unsats",
-            "buried_unsat_Hpol",
-            "HB_Score_full",
-            "HB_Score_hb",
-        ]:
-            net[score] *= symm_factor
-        return net
+        raise ValueError(f"Invalid symmetry method {symmetry_method} specified. Must be one of 'strict' or 'lazy'.")
 
 
 def concat_proteins(p_all: List[Protein], sort: bool = True) -> Protein:
@@ -394,3 +407,178 @@ def extract_chains(p: Protein, sel_chains: str = "") -> Tuple[Protein, Protein]:
     p_used = deepcopy(p).mask(np.where(chain_mask)[0])
     p_unused = deepcopy(p).mask(np.where(~chain_mask)[0])
     return p_used, p_unused
+
+
+def compute_Kabsch_R(xyz_1: Union[np.ndarray, torch.Tensor], xyz_2: Union[np.ndarray, torch.Tensor]) -> Union[np.ndarray, torch.Tensor]:
+    """Calculates optimal rotation matrix for aligning xyz_2 to xyz_1, following the Kabsch algorithm.
+
+    Args:
+        xyz_1 (Array): First set of coordinates, shape (N, 3).
+        xyz_2 (Array): Second set of coordinates, shape (N, 3).
+
+    Returns:
+        Array: The computed rotation matrix.
+
+    """
+    # Make sure they're the same class
+    assert type(xyz_1) is type(xyz_2)
+
+    # Make sure the shapes agree.
+    assert xyz_1.shape == xyz_2.shape
+
+    # Make sure there are only 2 dimensions
+    assert xyz_1.ndim == 2
+
+    # Make sure that the last dimension is 3
+    assert xyz_1.shape[-1] == 3
+
+    # Center coordinates on origin
+    xyz_1 = xyz_1 - xyz_1.mean(0)
+    xyz_2 = xyz_2 - xyz_2.mean(0)
+
+    # Computate the covariance matrix
+    C = xyz_2.T @ xyz_1
+
+    # Compute optimal rotation matrix using SVD
+    if isinstance(xyz_1, np.ndarray):
+        try:
+            U, S, Vh = np.linalg.svd(C)
+        except np.linalg.LinAlgError:
+            print("Hit SVD exception.")
+            U, S, Vh = np.linalg.svd(C + 1e-2 * C.mean() * np.random.randn(C.shape))
+    else:
+        try:
+            U, S, Vh = torch.linalg.svd(C)
+        except np.linalg.LinAlgError:
+            print("Hit SVD exception.")
+            U, S, Vh = torch.linalg.svd(C + 1e-2 * C.mean() * torch.rand_like(C))
+
+    # Get the sign to ensure right handedness
+    if isinstance(xyz_1, np.ndarray):
+        d = np.ones([3, 3])
+        d[:, -1] = np.sign(np.linalg.det(U) * np.linalg.det(Vh))
+    else:
+        d = torch.ones([3, 3], device=xyz_1.device)
+        d[:, -1] = torch.sign(torch.linalg.det(U) * torch.linalg.det(Vh))
+
+    # Rotation matrix R
+    R = (d * U) @ Vh
+
+    return R
+
+def compute_sc_clash_loss(
+    atom14_pred_positions: torch.Tensor,
+    atom14_mask: torch.Tensor,
+    aatype: torch.Tensor,
+    aatype_batch: torch.Tensor,
+    chi_mask: torch.Tensor,
+    clash_overlap_tolerance: float = 1.5,  # OpenFold value is 1.5
+    distance_threshold: float = 14.0,
+) -> torch.Tensor:
+    """Uses VdW  radii to find clashes b/w heavy atoms.
+    Note: ignores intra-residue clashes and backbone-backbone clashes."""
+
+    # Get needed components from batch.
+    restype_atom14_to_atom37 = []
+    for rt in rc.restypes:
+        atom_names = rc.restype_name_to_atom14_names[rc.restype_1to3[rt]]
+        restype_atom14_to_atom37.append(
+            [(rc.atom_order[name] if name else 0) for name in atom_names]
+        )
+    restype_atom14_to_atom37.append([0] * 14)
+    restype_atom14_to_atom37 = torch.tensor(
+        restype_atom14_to_atom37, dtype=torch.long, device=aatype.device
+    )
+    residx_atom14_to_atom37 = restype_atom14_to_atom37[aatype]
+
+    # Compute the Van der Waals radius for every atom
+    # (the first letter of the atom name is the element type).
+    # Shape: (*, N, 14).
+    atomtype_radius = [rc.van_der_waals_radius[name[0]] for name in rc.atom_types]
+    atomtype_radius = atom14_pred_positions.new_tensor(atomtype_radius)
+    atom14_atom_radius = atom14_mask * atomtype_radius[residx_atom14_to_atom37]
+
+    # Get the basis atom xyz for each residue.
+    # shape (*, N, 3)
+    eps = 1e-10
+    # Using Cb basis atom
+    basis_atom_idx = 4 * torch.ones_like(aatype)
+    basis_atom_idx[aatype == rc.restype_order["G"]] = 1
+
+    basis_xyz = torch.gather(
+        atom14_pred_positions,
+        -2,
+        basis_atom_idx[..., None, None].expand(*atom14_pred_positions.shape),
+    )[:, 0, :]
+
+    # Determine distances based on basis atoms.
+    # shape (*, N, N)
+    basis_dists = torch.sqrt(
+        eps
+        + torch.sum(
+            (basis_xyz[..., None, :, :] - basis_xyz[..., :, None, :]) ** 2, dim=-1
+        )
+    )
+
+    # Create the mask for valid residue pairs.
+    # shape (*, N, N)
+    fp_type = atom14_pred_positions.dtype
+    dists_mask = (aatype_batch[:, None] == aatype_batch[None, :]).type(fp_type)
+
+    # Mask out all the duplicate entries in the lower triangular matrix.
+    # Also mask out the diagonal (same residue pairs)
+    dists_mask = dists_mask * torch.triu(dists_mask, diagonal=1)
+
+    # Determine which residues pairs contain at least one network residue.
+    dists_mask = dists_mask * chi_mask[..., None]
+
+    # Determine which residue pairs are within the distance threshold.
+    # shape (*, N, N)
+    dists_lower_bound = distance_threshold * torch.ones_like(dists_mask)
+    dists_mask = dists_mask * (basis_dists < dists_lower_bound)
+    valid_pairs = torch.where(dists_mask)
+
+    # Get the atom14 coordinates for the valid residue pairs.
+    # shape (N_pairs, 14, 3)
+    res1_atom14_xyz = atom14_pred_positions[valid_pairs[0]]
+    res2_atom14_xyz = atom14_pred_positions[valid_pairs[1]]
+
+    # Get the atomic distances for the valid residue pairs.
+    # shape (N_pairs, 14, 14)
+    dists = torch.sqrt(
+        eps
+        + torch.sum(
+            (res1_atom14_xyz[..., None, :] - res2_atom14_xyz[..., None, :, :]) ** 2,
+            dim=-1,
+        )
+    )
+
+    # Initialize the mask for the allowed distances.
+    # shape (N_pairs, 14, 14)
+    dists_mask = torch.ones_like(dists)
+
+    # Backbone-backbone clashes are ignored. CB is included in the backbone.
+    bb_bb_mask = torch.zeros_like(dists_mask)
+    bb_bb_mask[..., :5, :5] = 1.0
+    dists_mask = dists_mask * (1.0 - bb_bb_mask)
+
+    # Compute the lower bound for the allowed distances.
+    # shape (N_pairs, 14, 14)
+    dists_lower_bound = dists_mask * (
+        atom14_atom_radius[valid_pairs[0]][..., :, None]
+        + atom14_atom_radius[valid_pairs[1]][..., None, :]
+    )
+
+    # Compute the error.
+    # shape (N_pairs, 14, 14)
+    dists_to_low_error = dists_mask * F.relu(
+        dists_lower_bound - clash_overlap_tolerance - dists
+    )
+
+    # Collect into per-sample loss
+    dists_to_low_error = torch.sum(dists_to_low_error, dim=(-1, -2))
+    clash_loss_batch = scatter(
+        dists_to_low_error, index=aatype_batch[valid_pairs[0]], dim=0, reduce="sum"
+    )
+
+    return clash_loss_batch

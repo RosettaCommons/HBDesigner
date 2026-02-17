@@ -371,14 +371,19 @@ class HBDesRunner:
                         df=df,
                         symm_mask=symmetry_mask,
                         clash_thresh=3.0,
+                        symmetry_method=self.opts.symm_method
                     ),
                     rows,
                 )
+                df["flag"] = False
                 for i, r in enumerate(result):
-                    df.iloc[i] = r
+                    if r is not None:
+                        r["flag"] = True
+                        df.iloc[i] = r
             # Drop identical symmetrized networks (keep best-scoring one)
             df = df.drop_duplicates(subset=["network"], keep="first")
-            df = df.dropna()
+            # Drop networks that failed symmetrization
+            df = df[df["flag"] == True].drop(columns=["flag"]).reset_index(drop=True)
 
             if df.shape[0] < 1:
                 print("No valid networks passed symmetrization. Ending run.")

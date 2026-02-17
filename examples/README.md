@@ -11,6 +11,13 @@ If provided with an interface, HBDesigner will automatically try to design a net
 - Two-sided: `interface/two_sided`
 - One-sided: `interface/one_sided`
 
+## Symmetric Design:
+HBDesigner supports limited symmetry awareness with two different approaches: "strict" and "lazy" symmetry. "Strict" symmetry explicitly designs symmetric networks where all symmetric residues must contribute to the network. "Lazy" symmetry designs asymmetric networks, then tries to symmetrize them across any symmetric chains. The former is more useful for homomers where symmetric residues are in direct contact, while the latter is useful for homomers where symmetric residues are more distal from one another.
+
+- Lazy: `interface/symm_lazy`
+- Strict: `interface/symm_strict`
+
+
 ## Sequence Conditioning
 We can use sequence conditioning to specify which amino acid(s) are used, including partial or ambiguous (e.g., "Either ASN or GLN") specifications. This is specified with a comma-separated list of amino acid groups, as shown below.
 
