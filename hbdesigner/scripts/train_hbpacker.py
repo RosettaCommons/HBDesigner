@@ -198,8 +198,13 @@ class HBPackerDataset(HBDesignerDataset):
 
         # Need to increment symmetry idx by protein length
         if hasattr(batch, "symmetry_idx"):
-            for i, ptr in enumerate(batch.ptr[:-1]):
-                batch.symmetry_idx[ptr:batch.ptr[i+1]] += ptr
+            # increment symmetry idx by num packed res, not total residues
+            batch_symm = batch.aatype_batch[batch.chi_mask.bool()]
+            n_res_total = 0
+            for i in range(batch.num_graphs):
+                n_unique_res = batch.symmetry_idx[batch_symm == i].unique().numel()
+                batch.symmetry_idx[batch_symm == i] += n_res_total
+                n_res_total += n_unique_res
 
         # Get remaining res per set
         batch.net_res_num = torch.tensor(
@@ -338,9 +343,15 @@ class HBPackerDataset(HBDesignerDataset):
         atom14_xyz[hbnet_pos] = atom14_xyz_sc[hbnet_pos]
         atom14_mask[hbnet_pos] = atom14_mask_sc[hbnet_pos]
 
+        # Symmetry idx should run 0 to N for N residue sets
         symmetry_idx = np.arange(p.n_res) if symmetry_idx is None else symmetry_idx
         symmetry_idx = symmetry_idx[knn]
         symmetry_idx = symmetry_idx[hbnet_pos]
+        symm_values = np.unique(symmetry_idx)
+        symm_idx_new = np.zeros_like(symmetry_idx)
+        for i, val in enumerate(symm_values):
+            symm_idx_new[symmetry_idx == val] = i
+        symmetry_idx = symm_idx_new
 
         # Create the Data object
         protein_data = gd.Data(
@@ -357,8 +368,8 @@ class HBPackerDataset(HBDesignerDataset):
             sc_dihedral_mask=torch.from_numpy(sc_dihedral_mask).to(
                 torch.float32
             ),  # [L, 4]
-            pack_knn=torch.from_numpy(knn).to(torch.long),  # [K]
-            symmetry_idx=torch.from_numpy(symmetry_idx).to(torch.long),  # [R]
+            pack_knn=torch.from_numpy(knn).to(torch.long),  # [L]
+            symmetry_idx=torch.from_numpy(symmetry_idx).to(torch.long),  # [L]
         )
 
         # chi mask is mask of packable positions

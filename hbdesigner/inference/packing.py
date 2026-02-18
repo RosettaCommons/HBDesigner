@@ -152,7 +152,6 @@ def minimize_and_score_network(
             "n_core_res": n_core_res,
         }
     )
-    print(scores)
     return scores
 
 

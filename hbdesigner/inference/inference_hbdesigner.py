@@ -279,6 +279,7 @@ class HBDesRunner:
                     self.scaffold, self.opts.sel_chains
                 )
             symmetry_mask = get_symmetry_mask(self.scaffold, self.opts.symm_chains)
+            # Symmetry_idx is used for strict symmetry only
             if self.opts.symm_file is not None:
                 symmetry_idx = get_symmetry_idx(symmetry_mask)
             else:
@@ -863,7 +864,6 @@ class HBDesRunner:
         passed = {}
         for i, r in enumerate(results):
             if r is not None:
-                print(r)
                 if (
                     (r["buried_heavy_unsats"] <= self.opts.max_BUNs)
                     and (r["n_chains"] == total_chains)
