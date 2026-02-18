@@ -345,6 +345,10 @@ def get_symmetry_mask(p: Protein, symm_chains: str = None) -> np.ndarray:
                 )
             chain_combos = combinations(chains, 2)
             for cc in chain_combos:
+                if (cc[0] not in chain_pos.keys()) or (cc[1] not in chain_pos.keys()):
+                    raise ValueError(
+                        f"ERROR: Specified chain {cc[0]} or {cc[1]} not found in PDB with chains {chain_pos.keys()}!"
+                    )
                 if chain_pos[cc[0]].size != chain_pos[cc[1]].size:
                     raise ValueError(
                         f"ERROR: Chains {cc[0]} and {cc[1]} are different sizes, so they can't be symmetrized!"

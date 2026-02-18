@@ -18,5 +18,4 @@ run_hbdesigner \
     --n_workers 8 \
     --n_samples 500 \
     --n_res 3 \
-    --top_k 5 \
     --symm_chains A,B

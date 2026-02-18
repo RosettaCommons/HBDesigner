@@ -19,9 +19,14 @@ def example_protein() -> Protein:
     """Enables multiple protein instances to be generated."""
 
     class ProteinFactory(object):
-        def get(self, discard_Hs=False) -> Protein:
+        def get(self, discard_Hs=False, name="monomer") -> Protein:
+            fpath = {
+                "monomer": "examples/monomer/1PGA.pdb",
+                "heterodimer": "examples/interface/1YRK.pdb",
+                "homodimer": "examples/interface/symm_lazy/10GS.pdb",
+            }
             pdb_file = os.path.join(
-                Path(__file__).parents[1], "examples/monomer/1PGA.pdb"
+                Path(__file__).parents[1], fpath[name]
             )
             return Protein.from_pdb_file(pdb_file, discard_Hs=discard_Hs)
 

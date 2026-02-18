@@ -293,7 +293,7 @@ def biotite_hbond_detect(
     from biotite.structure.io.pdb import PDBFile
     from biotite.structure import hbond
     from io import StringIO
-    from proteingfn.data.protein import PDB_CHAIN_IDS
+    from hbdesigner.data.protein import PDB_CHAIN_IDS
 
     try:
         pdb_str = p.to_pdb()
@@ -639,7 +639,7 @@ def run_pdb2pqr(p: Protein) -> Protein:
                 os.unlink(path)
 
     temp_dir = '/dev/shm' if os.path.exists('/dev/shm') else None
-    pdb2pqr_EXE = "/home/hdieckhaus/miniforge3/envs/proteingfn/bin/pdb2pqr"
+    pdb2pqr_EXE = "/home/hdieckhaus/miniforge3/envs/hbdesigner/bin/pdb2pqr"
     with temporary_file(suffix='.pdb', dir=temp_dir) as tmp_input, \
          temporary_file(suffix='.pdb', dir=temp_dir) as tmp_output:
         
