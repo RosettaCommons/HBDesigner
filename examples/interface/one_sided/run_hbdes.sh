@@ -19,5 +19,5 @@ run_hbdesigner \
     --n_samples 200 \
     --n_res 3 \
     --top_k 5 \
-    --fixed_res B5 \
+    --anchor_res B5 \
     --omit_chains B

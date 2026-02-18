@@ -183,11 +183,11 @@ def get_hbdes_parser() -> FileArgumentParser:
         help="Minimum number of core residues required for each network. Defaults to 0.",
     )
     parser.add_argument(
-        "--fixed_res", 
+        "--anchor_res", 
         required=False, 
         type=str,
         default=None,
-        help="Comma-separated list of residues to keep fixed during design, in PDB chain/resnum format. Example: 'A12,B13,B49'."
+        help="Comma-separated list of residues to use as anchor residues during design, in PDB chain/resnum format. Example: 'A12,B13,B49'."
     )
     parser.add_argument(
         "--max_hb_score", 

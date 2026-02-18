@@ -229,13 +229,13 @@ def validate_residues(p: Protein, residues: str = None, mode: str = "guide") -> 
     Arguments:
         p (Protein): The Protein object to validate the guide res against.
         residues (str): A comma-separated string of guide residues in PDB format, e.g., 'A12,B45'.
-        mode (str): The mode of validation. Options are 'guide' and 'fixed'. ".
+        mode (str): The mode of validation. Options are 'guide' and 'anchor'. ".
     Returns:
         np.ndarray: An array of absolute residue indices corresponding to the specified residues.
                     Returns None if residues is None.
     """
     if residues is None:
-        if mode == "fixed":
+        if mode == "anchor":
             return np.empty((0,), dtype=np.int64)
         else:
             return None
@@ -258,18 +258,18 @@ def validate_residues(p: Protein, residues: str = None, mode: str = "guide") -> 
         raise ValueError(
             f"Only {len(abs_res)} provided. You must provide at least 2 guide res for centroid calculation."
         )
-    elif mode == "fixed":
+    elif mode == "anchor":
         abs_res = np.array(abs_res)
-        fixed_res_aatypes = p.aatype[abs_res]
-        invalid = fixed_res_aatypes[:, None] == rc.restype_non_hb_idx[None, :]
-        resnames = [rc.restypes_with_x[idx] for idx in fixed_res_aatypes]
+        anchor_res_aatypes = p.aatype[abs_res]
+        invalid = anchor_res_aatypes[:, None] == rc.restype_non_hb_idx[None, :]
+        resnames = [rc.restypes_with_x[idx] for idx in anchor_res_aatypes]
         description = []
         for rn, ri in zip(resnames, residues):
             description.append(ri + "->" + rn)
         description = " : ".join(description)
         if np.sum(invalid) > 0.0:
             raise ValueError(
-                f"Fixed residues contain hydrophobic restypes which are not allowed in HBDesigner networks:\t{description} ")
+                f"Anchor residues contain hydrophobic restypes which are not allowed in HBDesigner networks:\t{description} ")
 
     return np.array(abs_res)
 
@@ -302,9 +302,9 @@ def validate_chains(p: Protein, chains: str = None) -> Union[np.ndarray, None]:
     # True if not in requested chain IDs
     design_mask = np.isin(p.chain_index, chain_ids, invert=True)
 
-    # False if already noted as a fixed residue
-    fixed_res_mask = p.aatype != rc.restype_num
-    design_mask[fixed_res_mask] = False
+    # False if already noted as an anchor residue
+    anchor_res_mask = p.aatype != rc.restype_num
+    design_mask[anchor_res_mask] = False
     return design_mask
 
 

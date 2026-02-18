@@ -237,10 +237,10 @@ class HBDesRunner:
         )
 
         # Parsing params - can't validate until PDB is loaded
-        if self.opts.fixed_res is not None:
-            n_fixed_res = len(self.opts.fixed_res.split(","))
-            assert (self.opts.n_res - n_fixed_res) > 0, f"Network size ({self.opts.n_res}) must be larger than number of fixed residues ({n_fixed_res})"
-            assert n_fixed_res > 0, "You must provide at least one fixed residue if --fixed_res is specified."
+        if self.opts.anchor_res is not None:
+            n_anchor_res = len(self.opts.anchor_res.split(","))
+            assert (self.opts.n_res - n_anchor_res) > 0, f"Network size ({self.opts.n_res}) must be larger than number of anchor residues ({n_anchor_res})"
+            assert n_anchor_res > 0, "You must provide at least one anchor residue if --anchor_res is specified."
 
         # Retrieve model weights and configurations
         self.opts.pack_cfg = os.path.join(Path(__file__).parents[2], "model_weights/pack.yaml")
@@ -261,18 +261,18 @@ class HBDesRunner:
         try:
             self.scaffold = Protein.from_pdb_file(self.opts.pdb)
 
-            if self.opts.fixed_res is not None:
-                fixed_res = validate_residues(self.scaffold, self.opts.fixed_res, mode="fixed")
+            if self.opts.anchor_res is not None:
+                anchor_res = validate_residues(self.scaffold, self.opts.anchor_res, mode="anchor")
             else:
-                fixed_res = np.empty((0,), dtype=np.int64)
+                anchor_res = np.empty((0,), dtype=np.int64)
 
             scaffold_copy = deepcopy(self.scaffold)
             self.scaffold.clear_sequence()
 
-            # Impute fixed residues back in
-            self.scaffold.aatype[fixed_res] = scaffold_copy.aatype[fixed_res]
-            self.scaffold.atom27_xyz[fixed_res, ...] = scaffold_copy.atom27_xyz[fixed_res, ...]
-            self.scaffold.atom27_mask[fixed_res, ...] = scaffold_copy.atom27_mask[fixed_res, ...]
+            # Impute anchor residues back in
+            self.scaffold.aatype[anchor_res] = scaffold_copy.aatype[anchor_res]
+            self.scaffold.atom27_xyz[anchor_res, ...] = scaffold_copy.atom27_xyz[anchor_res, ...]
+            self.scaffold.atom27_mask[anchor_res, ...] = scaffold_copy.atom27_mask[anchor_res, ...]
 
             if self.opts.sel_chains is not None:
                 self.scaffold, scaffold_unused = extract_chains(
@@ -316,7 +316,7 @@ class HBDesRunner:
 
         # 3. Generate design sequences
         ttime = time.time()
-        samples = self.sample_from_hbdesigner(design_model, design_mask, guide_res, fixed_res, symmetry_idx=symmetry_idx)
+        samples = self.sample_from_hbdesigner(design_model, design_mask, guide_res, anchor_res, symmetry_idx=symmetry_idx)
         n_samples = len(samples)
         print(
             f"Finished generating {n_samples} unique samples with HBDesigner in {time.time() - ttime:.3f} sec"
@@ -389,7 +389,7 @@ class HBDesRunner:
         print("Ranking and saving outputs...\n", "=" * 100)
         rows = np.arange(df.shape[0])
 
-        # Symmetrization is slow, so we parallelize it if we can
+        # Lazy symmetrization is slow, so we parallelize it if we can
         if (symmetry_mask is not None) and (self.opts.symm_file is None):
             # Only used for lazy symmetry
             with Pool(self.opts.n_workers) as p:
@@ -438,11 +438,15 @@ class HBDesRunner:
         print("-" * 50)
         df_top = df_top.reset_index(drop=True)
         if self.opts.out_dir is not None:
-            df_top["Rank"] = df_top.index
+            df_top["Rank"] = df_top.index + 1
+            df_top["Scaffold"] = prefix
+            df_top["Output_PDB"] = df_top.apply(lambda x: f"{prefix}_HBDes_rank_{x['Rank']}.pdb", axis=1)
             df_top.to_csv(
                 os.path.join(self.opts.out_dir, f"{prefix}_HBDes_stats.csv"),
                 index=True,
                 columns=[
+                    "Scaffold",
+                    "Output_PDB",
                     "Rank",
                     "HB_Score_full",
                     "HB_Score_hb",
@@ -883,7 +887,7 @@ class HBDesRunner:
         model: HBDesigner,
         design_mask: np.ndarray,
         guide_res: np.ndarray = None,
-        fixed_res: np.ndarray = None,
+        anchor_res: np.ndarray = None,
         symmetry_idx: np.ndarray = None,
     ) -> List[Dict[str, List[int]]]:
         """
@@ -893,7 +897,7 @@ class HBDesRunner:
             model (HBDesigner): Loaded HBDesigner model.
             design_mask (np.ndarray): Boolean mask indicating designable positions.
             guide_res (np.ndarray, optional): Guide residues for triangulating virtual guide atom.
-            fixed_res (np.ndarray, optional): Fixed residues that are already present in the network.
+            anchor_res (np.ndarray, optional): Anchor residues that are already present in the network.
             symmetry_idx (np.ndarray, optional): Index array indicating symmetric positions in the scaffold.
         Returns:
             List[Dict[str, List[int]]]: List of unique predictions from the model.
@@ -906,7 +910,7 @@ class HBDesRunner:
             guide_radius=self.opts.guide_radius,
             guide_seq=self.opts.guide_seq,
             min_burial=self.opts.min_burial,
-            fixed_res=fixed_res,
+            anchor_res=anchor_res,
             design_mask=design_mask,
             omit_AA=self.opts.omit_AA,
             symmetry_idx=symmetry_idx,
@@ -939,7 +943,7 @@ class HBDesRunner:
 
         # Do collation and transfer ONCE and re-use batch
         batch = HBDesignerDataset.collate([data] * n_copies)
-        batch.net_res_num[:] = self.opts.n_res - fixed_res.size
+        batch.net_res_num[:] = self.opts.n_res - anchor_res.size
         batch.to(dev)
 
         while len(unique_preds) < self.opts.n_samples:

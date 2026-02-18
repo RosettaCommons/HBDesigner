@@ -116,7 +116,7 @@ These are extra (optional) params you can use to help guide the model toward mak
 --guide_radius 10. # this disables design for any res with Cb >10A from the guide atom.
 
 # Provide 'anchor' residue(s) around which to design a network.
---fixed_res B5 # Design networks using the residue B5 as an anchor, so all networks must contain this residue.
+--anchor_res B5 # Design networks using the residue B5 as an anchor, so all networks must contain this residue.
 ```
 
 ### Other sampling parameters:
@@ -156,8 +156,10 @@ These are useful if you have very specific scoring criteria you want to enforce 
 --sel_chains A,B
 
 # Symmetrize output networks after design. Useful for designing homooligomer interfaces. 
-# For example, if designing a homodimer interface, HBDesigner will attempt to copy any non-clashing networks across the interface.
---symm_chains A,B;C,D # Tie chains A and B together and separately tie chains C and D together.
+--symm_chains A,B # Tie chains A and B together.
+
+# Symmetry definition file (from Rosetta), required for 'strict' symmetry (see example above).
+--symm_file 5JOK.symm
 
 # Turn off design for one or more chains.
 --omit_chains B,C # Turn off chain B and C design options.
