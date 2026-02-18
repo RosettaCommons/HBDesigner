@@ -50,6 +50,7 @@ from hbdesigner.model.pippack_model import (
 )
 from hbdesigner.scripts.train_hbdesigner import HBDesignerDataset
 from hbdesigner.scripts.train_hbpacker import HBPackerDataset
+from hbdesigner.utils import seed_everything
 from pyrosetta.rosetta.basic.options import set_real_option
 
 
@@ -258,6 +259,8 @@ class HBDesRunner:
         t0 = time.time()
         # 1. Parse input file with specified args
         print(f"Running HBDesigner for input {self.opts.pdb}...")
+        if self.opts.seed is not None:
+            seed_everything(self.opts.seed)
         try:
             self.scaffold = Protein.from_pdb_file(self.opts.pdb)
 
@@ -307,7 +310,7 @@ class HBDesRunner:
         design_model = self.load_design_model(guide_res)
 
         print(f"Loading packing model for packer {self.opts.packer}...")
-        initialize_rosetta()
+        initialize_rosetta(seed=self.opts.seed)
         packing_model = self.load_packing_model()
 
         print(

@@ -900,12 +900,13 @@ def calc_seq_rec_batched(
     return pos_rec, seq_rec
 
 
-def initialize_rosetta(mode: str = "fast") -> None:
+def initialize_rosetta(mode: str = "fast", seed: int = None) -> None:
     """
     Initialize Rosetta for packing/scoring use.
 
     Arguments:
         mode (str): Packing 'mode' to use. If 'slow', will add -ex4 rotamers. Default is 'fast'.
+        seed (int, optional): Optional random seed for Rosetta sampling. Default is None, which means no seed will be set.
     """
     ros_opts = [
         "-mute all",
@@ -920,6 +921,8 @@ def initialize_rosetta(mode: str = "fast") -> None:
     ]
     if mode == "slow":
         ros_opts.extend(["-ex4"])
+    if seed is not None:
+        ros_opts.append(f"-run:jran {seed} -run:constant_seed True -seed_offset 0")
     pyrosetta.init(" ".join(ros_opts))
 
 

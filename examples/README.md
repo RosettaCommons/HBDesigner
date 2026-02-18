@@ -131,6 +131,10 @@ These are useful for enforcing sufficient burial and/or network sequence diversi
 # Temperature range to use for sampling procedure. Good values are 0.1 to 1.0. 
 # Lower values will adhere to conditioning better but will be less diverse, so generation may take longer.
 --T_range 0.3 1.0
+
+# Set a fixed seed for random number generation. Off by default.
+# Rosetta energy values may still vary slightly, but model sampling should be consistent.
+--seed 42
 ```
 
 ### Scoring parameters:

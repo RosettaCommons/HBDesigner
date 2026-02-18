@@ -210,5 +210,12 @@ def get_hbdes_parser() -> FileArgumentParser:
         default=None,
         help="Comma-separated list of amino acids to omit from design. Residues of these types will not be eligible for use in designed networks. Example: R,K means no LYS or ARG allowed."
     )
+    parser.add_argument(
+        "--seed",
+        required=False,
+        type=int,
+        default=None,
+        help="Random seed for reproducible sampling. Default is no seed.",
+    )
 
     return parser
