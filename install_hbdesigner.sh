@@ -10,7 +10,7 @@ mamba env create -n hbdesigner python=3.10
 mamba activate hbdesigner
 
 # 1. torch 2.8 for CUDA 12.8
-pip install torch==2.8
+pip install torch==2.8 --index-url https://download.pytorch.org/whl/cu128
 
 # 2. torch-geometric and scatter (need to install torch first)
 pip install torch_geometric

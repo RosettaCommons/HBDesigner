@@ -1072,7 +1072,7 @@ class HBDesRunner:
 
 def cli():
     parser = get_hbdes_parser()
-    args = parser.parse_args(sys.argv[1:])
+    args = parser.parse_args()
 
     model_runner = HBDesRunner(args)
     model_runner.run()
