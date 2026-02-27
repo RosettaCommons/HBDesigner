@@ -36,3 +36,6 @@ MANIFEST
 # Ignore slurm scripts
 */slurm/
 logs/
+# pixi environments
+.pixi/*
+!.pixi/config.toml

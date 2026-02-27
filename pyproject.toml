@@ -23,3 +23,47 @@ classifiers = [
 
 [project.scripts]
 run_hbdesigner = "hbdesigner.inference.inference_hbdesigner:cli"
+
+[tool.pixi.workspace]
+channels = ["conda-forge", "bioconda"]
+platforms = ["linux-64"]
+
+[pypi-options]
+extra-index-urls = ["https://download.pytorch.org/whl/cu128"]
+
+[tool.pixi.pypi-dependencies]
+HBDesigner = { path = ".", editable = true }
+torch = "==2.8.0"
+torch-geometric = "==2.7.0"
+torch-cluster = { url = "https://data.pyg.org/whl/torch-2.8.0%2Bcu128/torch_cluster-1.6.3%2Bpt28cu128-cp310-cp310-linux_x86_64.whl" }
+torch-scatter = { url = "https://data.pyg.org/whl/torch-2.8.0%2Bcu128/torch_scatter-2.1.2%2Bpt28cu128-cp310-cp310-linux_x86_64.whl" }
+numpy = "==1.26.4"
+omegaconf = ">=2.3.0,<3"
+biopython = ">=1.86,<2"
+wandb = ">=0.25.0,<0.26"
+networkx = ">=3.4.2,<4"
+pandas = ">=2.3.3,<3"
+pebble = ">=5.2.0,<6"
+pyrosetta = { url = "https://west.rosettacommons.org/pyrosetta/release/release/PyRosetta4.Release.python310.linux.cxx11thread.serialization.wheel/pyrosetta-2024.39%2Brelease.59628fb-cp310-cp310-linux_x86_64.whl" }
+
+[tool.pixi.tasks]
+
+[tool.pixi.system-requirements]
+cuda = "12.8"
+
+[tool.pixi.dependencies]
+python = "3.10.*"
+
+[tool.pixi.feature.dev.dependencies]
+pytest = "*"
+ruff = "*"
+hydride = ">=1.1.2,<2"
+biotite = ">=1.2.0,<2"
+reduce = "*"
+
+[tool.pixi.feature.dev.tasks]
+test = "pytest"
+
+[tool.pixi.environments]
+dev = ["dev"]
+
