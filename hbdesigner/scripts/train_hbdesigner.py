@@ -897,7 +897,10 @@ class HBDesignerTrainer(SupervisedTrainer):
 
     def load_model_state(self, ckpt_path: str) -> None:
         # Load weights from saved checkpoint.
-        map_location = {"cuda:0": f"cuda:{self.rank}"}
+        if self.device.type == "cuda" and torch.cuda.is_available():
+            map_location = {"cuda:0": f"cuda:{self.rank}"}
+        else:
+            map_location = "cpu"
         state = torch.load(ckpt_path, map_location=map_location)
 
         self.model.load_state_dict(state["model_state_dict"])
