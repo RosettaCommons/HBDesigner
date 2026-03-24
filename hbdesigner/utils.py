@@ -2,6 +2,7 @@ import logging
 import os
 import random
 import sys
+import contextlib
 from typing import Any, Iterable, List, Optional, Tuple, Union
 
 import numpy as np
@@ -154,6 +155,19 @@ def get_worker_device() -> torch.device:
     worker_info = torch.utils.data.get_worker_info()
     return _main_process_device[0] if worker_info is None else torch.device("cpu")
 
+def is_cuda_device(device: Union[str, torch.device]) -> bool:
+    dev = torch.device(device)
+    return dev.type == "cuda" and torch.cuda.is_available()
+
+
+def get_autocast_context(
+    device: Union[str, torch.device],
+    dtype: torch.dtype = torch.float16,
+):
+    if is_cuda_device(device):
+        return torch.autocast(device_type="cuda", dtype=dtype)
+    return contextlib.nullcontext()
+
 
 def seed_everything(seed: int = 42) -> None:
     """Seeds everything EXCEPT the worker seeds (see above fxn)"""
@@ -161,9 +175,10 @@ def seed_everything(seed: int = 42) -> None:
     os.environ["PYTHONHASHSEED"] = str(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
 
 def worker_init(worker_id):

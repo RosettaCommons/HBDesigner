@@ -25,6 +25,8 @@ from hbdesigner.utils import (
     dist_cycle,
     model_grad_norm,
     set_main_process_device,
+    is_cuda_device,
+    get_autocast_context,
 )
 
 MODELS = {
@@ -57,7 +59,7 @@ class SupervisedTrainer:
 
         # Set up device and rank
         self.rank = rank
-        self.device = torch.device(self.rank)
+        self.device = torch.device(self.cfg.device)
         if not self.cfg.use_ddp:
             self.use_ddp = False
             set_main_process_device(self.device)
@@ -189,7 +191,7 @@ class SupervisedTrainer:
 
     def step(self, loss: Tensor) -> None:
         # Compute gradients and clip.
-        if self.cfg.mixed_precision:
+        if self.cfg.mixed_precision and is_cuda_device(self.device):
             self.scaler.scale(loss).backward()
             with torch.no_grad():
                 # Recommended to unscale grads before clipping
@@ -231,7 +233,7 @@ class SupervisedTrainer:
         self.setup_opt()
 
         # Set up gradient scaler for mixed precision training.
-        if self.cfg.mixed_precision:
+        if self.cfg.mixed_precision and is_cuda_device(self.device):
             print("Automatic mixed precision training enabled.")
             self.scaler = torch.cuda.amp.GradScaler()
 
@@ -303,7 +305,7 @@ class SupervisedTrainer:
         self.model.train()
         try:
             if self.cfg.mixed_precision:
-                with torch.cuda.amp.autocast():
+                with get_autocast_context(self.device):
                     if not self.use_ddp:
                         loss, info = self.model.compute_losses(batch)
                     else:
@@ -530,7 +532,10 @@ class SupervisedTrainer:
 
     def load_model_state(self, ckpt_path: str) -> None:
         # Load weights from saved checkpoint.
-        map_location = {"cuda:0": f"cuda:{self.rank}"}
+        if is_cuda_device(self.device):
+            map_location = {"cuda:0": f"cuda:{self.rank}"}
+        else:
+            map_location = "cpu"
         state = torch.load(ckpt_path, map_location=map_location)
         if not self.use_ddp:
             self.model.load_state_dict(state["model_state_dict"])

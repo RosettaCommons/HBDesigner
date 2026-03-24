@@ -50,7 +50,7 @@ from hbdesigner.model.pippack_model import (
 )
 from hbdesigner.scripts.train_hbdesigner import HBDesignerDataset
 from hbdesigner.scripts.train_hbpacker import HBPackerDataset
-from hbdesigner.utils import seed_everything
+from hbdesigner.utils import seed_everything, get_autocast_context
 from pyrosetta.rosetta.basic.options import set_real_option
 
 
@@ -673,9 +673,10 @@ class HBDesRunner:
         # Iterate over dataloader with multiproc enabled
         while True:
             batch = next(dl)
-            with torch.autocast(device_type="cuda", dtype=torch.float16):
+            dev = next(model.parameters()).device
+            with get_autocast_context(dev):
                 packs = model.run_pack_recyc(
-                    batch.to("cuda" if torch.cuda.is_available() else "cpu"),
+                    batch.to(dev),
                     n_recycles=model.cfg.model.hbpacker.num_recycles,
                 )
             packs = packs.to("cpu")
@@ -964,7 +965,7 @@ class HBDesRunner:
                     f"Current temps (res/seq): {res_sample_temp_c:.3f}/{seq_sample_temp_c:.3f}"
                 )
             # Mixed precision inference is ~50% faster w/o dropping any performance
-            with torch.autocast(device_type="cuda", dtype=torch.float16):
+            with get_autocast_context(dev):
                 results = model.sample_new(
                     batch.clone(),
                     res_sample_temp=res_sample_temp_c,
