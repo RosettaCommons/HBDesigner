@@ -19,10 +19,6 @@ classifiers = [
 ]
 
 dependencies = [
-  "torch==2.8.0",
-  "torch-geometric==2.7.0",
-  "torch-cluster==1.6.3+pt28cu128",
-  "torch-scatter==2.1.2+pt28cu128",
   "pyrosetta",
   "numpy==1.26.4",
   "omegaconf>=2.3.0,<3",
@@ -31,6 +27,14 @@ dependencies = [
   "networkx>=3.4.2,<4",
   "pandas>=2.3.3,<3",
   "pebble>=5.2.0,<6",
+]
+
+[project.optional-dependencies]
+gpu = [
+  "torch @ https://download.pytorch.org/whl/cu128/torch-2.8.0%2Bcu128-cp310-cp310-manylinux_2_28_x86_64.whl ; platform_system == \"Linux\" and python_version == \"3.10\"",
+  "torch-geometric==2.7.0",
+  "torch-cluster @ https://data.pyg.org/whl/torch-2.8.0%2Bcu128/torch_cluster-1.6.3%2Bpt28cu128-cp310-cp310-linux_x86_64.whl ; platform_system == \"Linux\" and python_version == \"3.10\"",
+  "torch-scatter @ https://data.pyg.org/whl/torch-2.8.0%2Bcu128/torch_scatter-2.1.2%2Bpt28cu128-cp310-cp310-linux_x86_64.whl ; platform_system == \"Linux\" and python_version == \"3.10\"",
 ]
 
 [project.scripts]
@@ -71,9 +75,6 @@ pyrosetta = { url = "https://west.rosettacommons.org/pyrosetta/release/release/P
 channels = ["conda-forge", "bioconda"]
 platforms = ["linux-64"]
 
-[tool.pixi.pypi-options]
-extra-index-urls = ["https://download.pytorch.org/whl/cu128"]
-
 [tool.pixi.dependencies]
 python = "3.10.*"
 
@@ -81,16 +82,9 @@ python = "3.10.*"
 [tool.pixi.pypi-dependencies]
 HBDesigner = { path = ".", editable = true }
 
-# These are duplicated here on purpose because pixi does not read
-# [tool.uv.sources] from the main pyproject.toml.
-torch-cluster = { url = "https://data.pyg.org/whl/torch-2.8.0%2Bcu128/torch_cluster-1.6.3%2Bpt28cu128-cp310-cp310-linux_x86_64.whl" }
-torch-scatter = { url = "https://data.pyg.org/whl/torch-2.8.0%2Bcu128/torch_scatter-2.1.2%2Bpt28cu128-cp310-cp310-linux_x86_64.whl" }
 pyrosetta = { url = "https://west.rosettacommons.org/pyrosetta/release/release/PyRosetta4.Release.python310.linux.cxx11thread.serialization.wheel/pyrosetta-2024.39%2Brelease.59628fb-cp310-cp310-linux_x86_64.whl" }
 
 [tool.pixi.tasks]
-
-[tool.pixi.system-requirements]
-cuda = "12.8"
 
 [tool.pixi.feature.dev.dependencies]
 pytest = "*"
@@ -99,9 +93,27 @@ hydride = ">=1.1.2,<2"
 biotite = ">=1.2.0,<2"
 reduce = "*"
 
+[tool.pixi.feature.cpu.dependencies]
+pytorch = "<=2.5"
+torch-geometric = "*"
+pytorch_scatter = "*"
+pytorch_cluster = "*"
+
+[tool.pixi.feature.gpu.pypi-dependencies]
+torch = { url = "https://download.pytorch.org/whl/cu128/torch-2.8.0%2Bcu128-cp310-cp310-manylinux_2_28_x86_64.whl" }
+torch-cluster = { url = "https://data.pyg.org/whl/torch-2.8.0%2Bcu128/torch_cluster-1.6.3%2Bpt28cu128-cp310-cp310-linux_x86_64.whl" }
+torch-scatter = { url = "https://data.pyg.org/whl/torch-2.8.0%2Bcu128/torch_scatter-2.1.2%2Bpt28cu128-cp310-cp310-linux_x86_64.whl" }
+
+[tool.pixi.feature.gpu.system-requirements]
+cuda = "12.8"
+
 [tool.pixi.feature.dev.tasks]
 test = "pytest"
 
 [tool.pixi.environments]
-default = { features = [], solve-group = "default" }
-dev = { features = ["dev"], solve-group = "default" }
+default = { features = ["gpu"], solve-group = "gpu" }
+dev = { features = ["dev"], solve-group = "gpu" }
+cpu = { features = ["cpu"], solve-group = "cpu" }
+gpu = { features = ["gpu"], solve-group = "gpu" }
+dev-cpu = { features = ["cpu", "dev"], solve-group = "cpu" }
+dev-gpu = { features = ["gpu", "dev"], solve-group = "gpu" }
