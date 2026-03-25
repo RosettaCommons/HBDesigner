@@ -8,8 +8,6 @@ from pathlib import Path
 TEST_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = (TEST_DIR / "..").resolve()
 
-RUN_COMMAND=shutil.which("/home/woodsh/HBDesigner/.venv/bin/run_hbdesigner")
-
 SCENARIOS = [
     (
         "monomer_unconditional",
@@ -111,7 +109,12 @@ def test_scenarios(name, args, request):
     Runs hbdesigner via subprocess for each scenario
     """
     device = request.config.getoption("--device")
-    cmd = [RUN_COMMAND, *args]
+    cmd = [
+        sys.executable,
+        "-m",
+        "hbdesigner.inference.inference_hbdesigner",
+        *args,
+    ]
     if device == "cpu":
         cmd.append("--cpu")
 
