@@ -244,9 +244,15 @@ class HBDesRunner:
             assert n_anchor_res > 0, "You must provide at least one anchor residue if --anchor_res is specified."
 
         # Retrieve model weights and configurations
-        self.opts.pack_cfg = os.path.join(Path(__file__).parents[2], "model_weights/pack.yaml")
+        #self.opts.pack_cfg = os.path.join(Path(__file__).parents[2], "model_weights/pack.yaml")
+        pack_cfg_name = "pack_cpu.yaml" if self.opts.cpu else "pack.yaml"
+        design_cfg_name = (
+            f"{self.opts.design_model}_cpu.yaml" if self.opts.cpu else f"{self.opts.design_model}.yaml"
+        )
+        self.opts.pack_cfg = os.path.join(Path(__file__).parents[2], f"model_weights/{pack_cfg_name}")
         self.opts.pack_ckpt = os.path.join(Path(__file__).parents[2], "model_weights/pack.pt")
-        self.opts.design_cfg = os.path.join(Path(__file__).parents[2], f"model_weights/design_020.yaml")
+        #self.opts.design_cfg = os.path.join(Path(__file__).parents[2], f"model_weights/design_020.yaml")
+        self.opts.design_cfg = os.path.join(Path(__file__).parents[2], f"model_weights/{design_cfg_name}")
         self.opts.design_ckpt = os.path.join(Path(__file__).parents[2], f"model_weights/{self.opts.design_model}.pt")
         # These packing options are fixed for inference use
         self.opts.pack_crop = 10.0 

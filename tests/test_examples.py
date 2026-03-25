@@ -106,11 +106,14 @@ SCENARIOS = [
 ]
 
 @pytest.mark.parametrize("name, args", SCENARIOS)
-def test_scenarios(name, args):
+def test_scenarios(name, args, request):
     """
     Runs hbdesigner via subprocess for each scenario
     """
+    device = request.config.getoption("--device")
     cmd = [RUN_COMMAND, *args]
+    if device == "cpu":
+        cmd.append("--cpu")
 
     result = subprocess.run(
         cmd,
