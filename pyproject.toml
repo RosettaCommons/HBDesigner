@@ -30,6 +30,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+cpu = [
+  "torch @ https://download.pytorch.org/whl/cpu/torch-2.8.0%2Bcpu-cp310-cp310-manylinux_2_28_x86_64.whl ; platform_system == \"Linux\" and python_version == \"3.10\"",
+  "torch-geometric==2.7.0",
+  "torch-cluster @ https://data.pyg.org/whl/torch-2.8.0%2Bcpu/torch_cluster-1.6.3%2Bpt28cpu-cp310-cp310-linux_x86_64.whl ; platform_system == \"Linux\" and python_version == \"3.10\"",
+  "torch-scatter @ https://data.pyg.org/whl/torch-2.8.0%2Bcpu/torch_scatter-2.1.2%2Bpt28cpu-cp310-cp310-linux_x86_64.whl ; platform_system == \"Linux\" and python_version == \"3.10\"",
+]
 gpu = [
   "torch @ https://download.pytorch.org/whl/cu128/torch-2.8.0%2Bcu128-cp310-cp310-manylinux_2_28_x86_64.whl ; platform_system == \"Linux\" and python_version == \"3.10\"",
   "torch-geometric==2.7.0",

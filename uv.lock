@@ -277,11 +277,21 @@ dependencies = [
     { name = "pandas" },
     { name = "pebble" },
     { name = "pyrosetta" },
-    { name = "torch" },
-    { name = "torch-cluster" },
-    { name = "torch-geometric" },
-    { name = "torch-scatter" },
     { name = "wandb" },
+]
+
+[package.optional-dependencies]
+cpu = [
+    { name = "torch", marker = "sys_platform == 'linux'" },
+    { name = "torch-cluster", marker = "sys_platform == 'linux'" },
+    { name = "torch-geometric" },
+    { name = "torch-scatter", marker = "sys_platform == 'linux'" },
+]
+gpu = [
+    { name = "torch", marker = "sys_platform == 'linux'" },
+    { name = "torch-cluster", marker = "sys_platform == 'linux'" },
+    { name = "torch-geometric" },
+    { name = "torch-scatter", marker = "sys_platform == 'linux'" },
 ]
 
 [package.dev-dependencies]
@@ -301,12 +311,17 @@ requires-dist = [
     { name = "pandas", specifier = ">=2.3.3,<3" },
     { name = "pebble", specifier = ">=5.2.0,<6" },
     { name = "pyrosetta", url = "https://west.rosettacommons.org/pyrosetta/release/release/PyRosetta4.Release.python310.linux.cxx11thread.serialization.wheel/pyrosetta-2024.39%2Brelease.59628fb-cp310-cp310-linux_x86_64.whl" },
-    { name = "torch", specifier = "==2.8.0", index = "https://download.pytorch.org/whl/cu128" },
-    { name = "torch-cluster", url = "https://data.pyg.org/whl/torch-2.8.0%2Bcu128/torch_cluster-1.6.3%2Bpt28cu128-cp310-cp310-linux_x86_64.whl" },
-    { name = "torch-geometric", specifier = "==2.7.0" },
-    { name = "torch-scatter", url = "https://data.pyg.org/whl/torch-2.8.0%2Bcu128/torch_scatter-2.1.2%2Bpt28cu128-cp310-cp310-linux_x86_64.whl" },
+    { name = "torch", marker = "python_full_version == '3.10.*' and sys_platform == 'linux' and extra == 'cpu'", index = "https://download.pytorch.org/whl/cu128" },
+    { name = "torch", marker = "python_full_version == '3.10.*' and sys_platform == 'linux' and extra == 'gpu'", index = "https://download.pytorch.org/whl/cu128" },
+    { name = "torch-cluster", marker = "python_full_version == '3.10.*' and sys_platform == 'linux' and extra == 'cpu'", url = "https://data.pyg.org/whl/torch-2.8.0%2Bcu128/torch_cluster-1.6.3%2Bpt28cu128-cp310-cp310-linux_x86_64.whl" },
+    { name = "torch-cluster", marker = "python_full_version == '3.10.*' and sys_platform == 'linux' and extra == 'gpu'", url = "https://data.pyg.org/whl/torch-2.8.0%2Bcu128/torch_cluster-1.6.3%2Bpt28cu128-cp310-cp310-linux_x86_64.whl" },
+    { name = "torch-geometric", marker = "extra == 'cpu'", specifier = "==2.7.0" },
+    { name = "torch-geometric", marker = "extra == 'gpu'", specifier = "==2.7.0" },
+    { name = "torch-scatter", marker = "python_full_version == '3.10.*' and sys_platform == 'linux' and extra == 'cpu'", url = "https://data.pyg.org/whl/torch-2.8.0%2Bcu128/torch_scatter-2.1.2%2Bpt28cu128-cp310-cp310-linux_x86_64.whl" },
+    { name = "torch-scatter", marker = "python_full_version == '3.10.*' and sys_platform == 'linux' and extra == 'gpu'", url = "https://data.pyg.org/whl/torch-2.8.0%2Bcu128/torch_scatter-2.1.2%2Bpt28cu128-cp310-cp310-linux_x86_64.whl" },
     { name = "wandb", specifier = ">=0.25.0,<0.26" },
 ]
+provides-extras = ["cpu", "gpu"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -999,7 +1014,6 @@ dependencies = [
 ]
 wheels = [
     { url = "https://download.pytorch.org/whl/cu128/torch-2.8.0%2Bcu128-cp310-cp310-manylinux_2_28_x86_64.whl", hash = "sha256:0c96999d15cf1f13dd7c913e0b21a9a355538e6cfc10861a17158320292f5954" },
-    { url = "https://download.pytorch.org/whl/cu128/torch-2.8.0%2Bcu128-cp310-cp310-win_amd64.whl", hash = "sha256:43938e9a174c90e5eb9e906532b2f1e21532bbfa5a61b65193b4f54714d34f9e" },
 ]
 
 [[package]]
