@@ -28,7 +28,7 @@ cd HBDesigner/
 pixi install
 
 # to install with pixi to run on a CPU instead use
-pixi install -e gpu
+pixi install -e cpu
 ```
 
 The `Pixi` installation is much faster than `mamba`, but requires slightly more awkward syntax when running `HBDesigner`. See `examples/monomer/run_with_pixi` for an example.
