@@ -6,11 +6,20 @@ HBDesigner is an algorithm that designs highly-connected hydrogen bonding networ
 
 ## Installation
 
-HBDesigner can be installed using `mamba`, `uv`, or `Pixi`. The following will create a `mamba` environment called `hbdesigner` with all necessary dependencies.
+HBDesigner can be installed using `mamba`, `uv`, or `Pixi`. 
 ```
+# first, clone the repo 
 git clone https://github.com/Kuhlman-Lab/HBDesigner.git
 cd HBDesigner/
+```
+To create a virtual environment with `mamba` for use on a GPU or CPU, respectively:
+```
+# for running on a GPU
 mamba env create -f env.yaml
+pip install .
+
+# for running on a CPU
+mamba env create -f env_cpu.yaml
 pip install .
 ```
 To create a virtual environment with `uv` for use on a GPU or CPU respectively:
@@ -32,13 +41,6 @@ pixi install -e cpu
 ```
 
 The `Pixi` installation is much faster than `mamba`, but requires slightly more awkward syntax when running `HBDesigner`. See `examples/monomer/run_with_pixi` for an example.
-
-HBDesigner can be installed using the provided `install_hbdesigner.sh` script. This script requires the `mamba` package manager, but it can be readily adapted to use other package managers.
-```
-git clone https://github.com/Kuhlman-Lab/HBDesigner.git
-cd HBDesigner/
-sh install_hbdesigner.sh
-```
 
 ## Using HBDesigner
 
