@@ -1,6 +1,6 @@
 # Installation Guide
 
-# Contents
+## Contents
 
 
 ---
@@ -80,6 +80,7 @@ If your system has an older version of CUDA, then there are several dependencies
 - 
 
 ---
+(common-issues)=
 ## Common Issues
 
 ### `ImportError: /lib64/libm.so.6: version `GLIBC_2.27' not found`
