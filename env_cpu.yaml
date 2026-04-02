@@ -1,4 +1,4 @@
-name: hbdesigner_debug
+name: hbdesigner_cpu
 channels:
   - conda-forge
 dependencies:
