@@ -31,16 +31,28 @@ dependencies = [
 
 [project.optional-dependencies]
 cpu = [
-  "torch @ https://download.pytorch.org/whl/cpu/torch-2.8.0%2Bcpu-cp310-cp310-manylinux_2_28_x86_64.whl ; platform_system == \"Linux\" and python_version == \"3.10\"",
+  "torch @ https://download.pytorch.org/whl/cpu/torch-2.4.1%2Bcpu-cp310-cp310-linux_x86_64.whl ; platform_system == \"Linux\" and python_version == \"3.10\"",
   "torch-geometric==2.7.0",
-  "torch-cluster @ https://data.pyg.org/whl/torch-2.8.0%2Bcpu/torch_cluster-1.6.3%2Bpt28cpu-cp310-cp310-linux_x86_64.whl ; platform_system == \"Linux\" and python_version == \"3.10\"",
-  "torch-scatter @ https://data.pyg.org/whl/torch-2.8.0%2Bcpu/torch_scatter-2.1.2%2Bpt28cpu-cp310-cp310-linux_x86_64.whl ; platform_system == \"Linux\" and python_version == \"3.10\"",
+  "torch-cluster @ https://data.pyg.org/whl/torch-2.4.0%2Bcpu/torch_cluster-1.6.3%2Bpt24cpu-cp310-cp310-linux_x86_64.whl ; platform_system == \"Linux\" and python_version == \"3.10\"",
+  "torch-scatter @ https://data.pyg.org/whl/torch-2.4.0%2Bcpu/torch_scatter-2.1.2%2Bpt24cpu-cp310-cp310-linux_x86_64.whl ; platform_system == \"Linux\" and python_version == \"3.10\"",
 ]
 gpu = [
-  "torch @ https://download.pytorch.org/whl/cu128/torch-2.8.0%2Bcu128-cp310-cp310-manylinux_2_28_x86_64.whl ; platform_system == \"Linux\" and python_version == \"3.10\"",
+  "torch @ https://download.pytorch.org/whl/cu130/torch-2.9.0%2Bcu130-cp310-cp310-manylinux_2_28_x86_64.whl ; platform_system == \"Linux\" and python_version == \"3.10\"",
   "torch-geometric==2.7.0",
-  "torch-cluster @ https://data.pyg.org/whl/torch-2.8.0%2Bcu128/torch_cluster-1.6.3%2Bpt28cu128-cp310-cp310-linux_x86_64.whl ; platform_system == \"Linux\" and python_version == \"3.10\"",
-  "torch-scatter @ https://data.pyg.org/whl/torch-2.8.0%2Bcu128/torch_scatter-2.1.2%2Bpt28cu128-cp310-cp310-linux_x86_64.whl ; platform_system == \"Linux\" and python_version == \"3.10\"",
+  "torch-cluster @ https://data.pyg.org/whl/torch-2.9.0%2Bcu130/torch_cluster-1.6.3%2Bpt29cu130-cp310-cp310-linux_x86_64.whl ; platform_system == \"Linux\" and python_version == \"3.10\"",
+  "torch-scatter @ https://data.pyg.org/whl/torch-2.9.0%2Bcu130/torch_scatter-2.1.2%2Bpt29cu130-cp310-cp310-linux_x86_64.whl ; platform_system == \"Linux\" and python_version == \"3.10\"",
+]
+gpu-cu124 = [
+  "torch @ https://download.pytorch.org/whl/cu124/torch-2.6.0%2Bcu124-cp310-cp310-linux_x86_64.whl ; platform_system == \"Linux\" and python_version == \"3.10\"",
+  "torch-geometric==2.7.0",
+  "torch-cluster @ https://data.pyg.org/whl/torch-2.6.0%2Bcu124/torch_cluster-1.6.3%2Bpt26cu124-cp310-cp310-linux_x86_64.whl ; platform_system == \"Linux\" and python_version == \"3.10\"",
+  "torch-scatter @ https://data.pyg.org/whl/torch-2.6.0%2Bcu124/torch_scatter-2.1.2%2Bpt26cu124-cp310-cp310-linux_x86_64.whl ; platform_system == \"Linux\" and python_version == \"3.10\"",
+]
+gpu-cu130 = [
+  "torch @ https://download.pytorch.org/whl/cu130/torch-2.9.0%2Bcu130-cp310-cp310-manylinux_2_28_x86_64.whl ; platform_system == \"Linux\" and python_version == \"3.10\"",
+  "torch-geometric==2.7.0",
+  "torch-cluster @ https://data.pyg.org/whl/torch-2.9.0%2Bcu130/torch_cluster-1.6.3%2Bpt29cu130-cp310-cp310-linux_x86_64.whl ; platform_system == \"Linux\" and python_version == \"3.10\"",
+  "torch-scatter @ https://data.pyg.org/whl/torch-2.9.0%2Bcu130/torch_scatter-2.1.2%2Bpt29cu130-cp310-cp310-linux_x86_64.whl ; platform_system == \"Linux\" and python_version == \"3.10\"",
 ]
 
 [project.scripts]
@@ -62,15 +74,26 @@ include = ["hbdesigner*"]
 # uv configuration
 # -----------------
 
-[[tool.uv.index]]
-name = "pytorch-cu128"
-url = "https://download.pytorch.org/whl/cu128"
-explicit = true
+[tool.uv]
+conflicts = [
+  [
+    { extra = "gpu" },
+    { extra = "gpu-cu130" },
+  ],
+  [
+    { extra = "gpu-cu124" },
+    { extra = "gpu-cu130" },
+  ],
+]
+
+[tool.uv.pip]
+no-build-isolation-package = ["torch-cluster", "torch-scatter"]
+
+[tool.uv.pip.extra-build-dependencies]
+torch-cluster = ["setuptools", "torch"]
+torch-scatter = ["setuptools", "torch"]
 
 [tool.uv.sources]
-torch = { index = "pytorch-cu128" }
-torch-cluster = { url = "https://data.pyg.org/whl/torch-2.8.0%2Bcu128/torch_cluster-1.6.3%2Bpt28cu128-cp310-cp310-linux_x86_64.whl" }
-torch-scatter = { url = "https://data.pyg.org/whl/torch-2.8.0%2Bcu128/torch_scatter-2.1.2%2Bpt28cu128-cp310-cp310-linux_x86_64.whl" }
 pyrosetta = { url = "https://west.rosettacommons.org/pyrosetta/release/release/PyRosetta4.Release.python310.linux.cxx11thread.serialization.wheel/pyrosetta-2024.39%2Brelease.59628fb-cp310-cp310-linux_x86_64.whl" }
 
 # -----------------
@@ -101,17 +124,27 @@ reduce = "*"
 
 [tool.pixi.feature.cpu.dependencies]
 pytorch = "<=2.5"
-torch-geometric = "*"
+pytorch_geometric = "==2.7.0"
 pytorch_scatter = "*"
 pytorch_cluster = "*"
 
-[tool.pixi.feature.gpu.pypi-dependencies]
-torch = { url = "https://download.pytorch.org/whl/cu128/torch-2.8.0%2Bcu128-cp310-cp310-manylinux_2_28_x86_64.whl" }
-torch-cluster = { url = "https://data.pyg.org/whl/torch-2.8.0%2Bcu128/torch_cluster-1.6.3%2Bpt28cu128-cp310-cp310-linux_x86_64.whl" }
-torch-scatter = { url = "https://data.pyg.org/whl/torch-2.8.0%2Bcu128/torch_scatter-2.1.2%2Bpt28cu128-cp310-cp310-linux_x86_64.whl" }
-
 [tool.pixi.feature.gpu.system-requirements]
-cuda = "12.8"
+cuda = "12.4"
+
+[tool.pixi.feature.gpu-cu124.system-requirements]
+cuda = "12.4"
+
+[tool.pixi.feature.gpu-cu130.system-requirements]
+cuda = "13.0"
+
+[tool.pixi.feature.gpu-cu130.pypi-dependencies]
+torch = { url = "https://download.pytorch.org/whl/cu130/torch-2.9.0%2Bcu130-cp310-cp310-manylinux_2_28_x86_64.whl" }
+torch-geometric = "==2.7.0"
+torch-cluster = { url = "https://data.pyg.org/whl/torch-2.9.0%2Bcu130/torch_cluster-1.6.3%2Bpt29cu130-cp310-cp310-linux_x86_64.whl" }
+torch-scatter = { url = "https://data.pyg.org/whl/torch-2.9.0%2Bcu130/torch_scatter-2.1.2%2Bpt29cu130-cp310-cp310-linux_x86_64.whl" }
+
+[tool.pixi.feature.gpu-cu130.pypi-options]
+no-build-isolation = ["torch-cluster", "torch-scatter"]
 
 [tool.pixi.feature.dev.tasks]
 test = "pytest"
@@ -121,5 +154,9 @@ default = { features = ["gpu"], solve-group = "gpu" }
 dev = { features = ["dev"], solve-group = "gpu" }
 cpu = { features = ["cpu"], solve-group = "cpu" }
 gpu = { features = ["gpu"], solve-group = "gpu" }
+gpu-cu124 = { features = ["gpu-cu124"], solve-group = "gpu-cu124" }
+gpu-cu130 = { features = ["gpu-cu130"], solve-group = "gpu-cu130" }
 dev-cpu = { features = ["cpu", "dev"], solve-group = "cpu" }
 dev-gpu = { features = ["gpu", "dev"], solve-group = "gpu" }
+dev-gpu-cu124 = { features = ["gpu-cu124", "dev"], solve-group = "gpu-cu124" }
+dev-gpu-cu130 = { features = ["gpu-cu130", "dev"], solve-group = "gpu-cu130" }
