@@ -24,7 +24,9 @@ jobs:
 
             - name: Install dependencies
               run: |
-                  uv sync --group dev --extra cpu
+                  uv venv --python 3.10
+                  source .venv/bin/activate
+                  uv pip install -e ".[cpu]" --group dev
 
             - name: Run tests
               run: |
