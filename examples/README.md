@@ -95,7 +95,7 @@ Smaller amino acids, especially SER and THR, have notably higher success rates. 
 ## Postprocessing
 We provide a helper script called `merge_networks.py` that attempts to naively combine output networks by checking for sequence overlap and clashes. This is NOT an exhaustive sweep, so it will not return ALL possible networks, but a subset from a rapid sampling procedure.
 ```
-python merge_networks.py --designs designs/ --output merged_designs/ --no_duplicates --max_order 5 --min_order 2
+python hbdesigner/scripts/merge_networks.py --designs designs/ --output merged_designs/ --no_duplicates --max_order 5 --min_order 2
 ```
 
 ### Conditioning parameters:
