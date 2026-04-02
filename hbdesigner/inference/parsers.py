@@ -222,5 +222,19 @@ def get_hbdes_parser() -> FileArgumentParser:
         default=None,
         help="Random seed for reproducible sampling. Default is no seed.",
     )
+    parser.add_argument(
+        "--design_model_ckpt", 
+        required=False,
+        type=str,
+        default=None,
+        help="Path to custom design model checkpoint. If not specified, will use default checkpoint for the specified design model (e.g. 'design_020')."
+    )
+    parser.add_argument(
+        "--packing_model_ckpt",
+        required=False,
+        type=str,
+        default=None,
+        help="Path to custom packing model checkpoint. If not specified, will use default checkpoint."
+    )
 
     return parser

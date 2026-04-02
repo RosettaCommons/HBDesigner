@@ -75,6 +75,10 @@ These are the minimal input params that you should consider setting for any desi
 
 # Number of top (best scoring, see below section for details) designs to save. Good values are 5-25, depending on your use case.
 --top_k 5
+
+# If needed, model checkpoint paths can be specified as follows:
+--design_model_ckpt /path/to/model_weights/design_020.pt
+--packing_model_ckpt /path/to/model_weights/pack.pt
 ```
 
 ## Usage Advice
