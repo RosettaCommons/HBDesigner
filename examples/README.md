@@ -97,6 +97,7 @@ We provide a helper script called `merge_networks.py` that attempts to naively c
 
 When doing one-sided interface design, we may want to graft our output network back onto the wildtype target for downstream modeling. We provide a helper script called `graft_seq.py` to do this. For example usage, see `examples/postprocessing/run_graft.sh`
 
+The most common use for HBDesigner outputs is as input for traditional sequence design. To do this, we use LigandMPNN to design the remaining sequence, keeping the HBDesigner network residues fixed. For an example of this, see `examples/postprocessing/run_mpnn.sh`.
 
 ### Conditioning parameters:
 These are extra (optional) params you can use to help guide the model toward making specific types of networks more often.
