@@ -15,7 +15,7 @@ cd HBDesigner/
 To create a virtual environment with `mamba` for use on a GPU or CPU, respectively:
 ```
 # for running on a GPU
-mamba env create -f env.yaml
+mamba env create -f env_gpu.yaml
 pip install .
 
 # for running on a CPU
@@ -30,13 +30,12 @@ uv pip install -e ".[gpu]"
 # for running on a CPU
 uv pip install -e ".[cpu]"
 ```
-We also provide an alternative install method using `Pixi`. The following will create a `Pixi` project in the `HBDesigner` root directory:
+To create a virtual environment with `Pixi` for use on a GPU or CPU respectively:
 ```
-git clone https://github.com/Kuhlman-Lab/HBDesigner.git
-cd HBDesigner/
+# for running on a GPU
 pixi install
 
-# to install with pixi to run on a CPU instead use
+# for running on a CPU
 pixi install -e cpu
 ```
 
