@@ -48,6 +48,11 @@ def get_hbdes_parser() -> FileArgumentParser:
         help="Design model to use. Default is 'design_020' (moderate noise), but 'design_002' (low noise) is also available.",
     )
     parser.add_argument(
+        "--cpu",
+        action="store_true",
+        help="Run inference on CPU by loading CPU-specific YAML configs.",
+    )
+    parser.add_argument(
         "--out_dir",
         type=str,
         required=False,
