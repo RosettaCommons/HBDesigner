@@ -11,8 +11,8 @@ import sys
 sys.path.insert(0, os.path.abspath("../../"))
 
 project = 'HBDesigner'
-copyright = '2026, Henry Diekhaus, Kuhlman Lab'
-author = 'Henry Diekhaus, Kuhlman Lab'
+copyright = '2026, Henry Dieckhaus, Kuhlman Lab'
+author = 'Henry Dieckhaus, Kuhlman Lab'
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
