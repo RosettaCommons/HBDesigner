@@ -30,5 +30,5 @@ jobs:
 
             - name: Run tests
               run: |
-                  source .venv/bin/acticate
+                  source .venv/bin/activate
                   pytest --device=cpu
