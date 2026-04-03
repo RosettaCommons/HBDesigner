@@ -30,4 +30,5 @@ jobs:
 
             - name: Run tests
               run: |
-                  uv run pytest --device=cpu
+                  source .venv/bin/acticate
+                  pytest --device=cpu
