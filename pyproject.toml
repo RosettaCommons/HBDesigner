@@ -76,14 +76,12 @@ include = ["hbdesigner*"]
 
 [tool.uv]
 conflicts = [
-  [
-    { extra = "gpu" },
-    { extra = "gpu-cu130" },
-  ],
-  [
-    { extra = "gpu-cu124" },
-    { extra = "gpu-cu130" },
-  ],
+  [{ extra = "cpu" }, { extra = "gpu" }],
+  [{ extra = "cpu" }, { extra = "gpu-cu124" }],
+  [{ extra = "cpu" }, { extra = "gpu-cu130" }],
+  [{ extra = "gpu" }, { extra = "gpu-cu124" }],
+  [{ extra = "gpu" }, { extra = "gpu-cu130" }],
+  [{ extra = "gpu-cu124" }, { extra = "gpu-cu130" }], 
 ]
 
 [tool.uv.pip]
