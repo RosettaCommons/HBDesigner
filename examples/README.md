@@ -79,6 +79,9 @@ These are the minimal input params that you should consider setting for any desi
 # If needed, model checkpoint paths can be specified as follows:
 --design_model_ckpt /path/to/model_weights/design_020.pt
 --packing_model_ckpt /path/to/model_weights/pack.pt
+
+# If running on a CPU include
+--cpu
 ```
 
 ## Usage Advice
