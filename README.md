@@ -24,8 +24,14 @@ pip install .
 ```
 To create a virtual environment with `uv` for use on a GPU or CPU respectively:
 ```
+uv venv --python 3.10
+source .venv/bin/activate
+
 # for running on a GPU
 uv pip install -e ".[gpu]"
+
+# for running on a GPU with cuda 12.4
+uv pip install -e ".[gpu-cu124]"
 
 # for running on a CPU
 uv pip install -e ".[cpu]"
@@ -36,8 +42,12 @@ git clone https://github.com/Kuhlman-Lab/HBDesigner.git
 cd HBDesigner/
 pixi install
 
-# to install with pixi to run on a CPU instead use
+# if installing with pixi on a GPU with CUDA 12.4 and include -e gpu-cu124 in pixi run command
+pixi install -e gpu-cu124
+
+# to install with pixi to run on a CPU instead use and include -e cpu in pixi run command
 pixi install -e cpu
+
 ```
 
 The `Pixi` installation is much faster than `mamba`, but requires slightly more awkward syntax when running `HBDesigner`. See `examples/monomer/run_with_pixi` for an example.
