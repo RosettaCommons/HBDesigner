@@ -76,6 +76,10 @@ These are the minimal input params that you should consider setting for any desi
 # Number of top (best scoring, see below section for details) designs to save. Good values are 5-25, depending on your use case.
 --top_k 5
 
+# If needed, model checkpoint paths can be specified as follows:
+--design_model_ckpt /path/to/model_weights/design_020.pt
+--packing_model_ckpt /path/to/model_weights/pack.pt
+
 # If running on a CPU include
 --cpu
 ```
@@ -92,10 +96,11 @@ At larger `--n_res`, packing is harder, so you will get fewer good designs per `
 Smaller amino acids, especially SER and THR, have notably higher success rates. This means that, if you don't care what amino acids are in your network, you can get higher success rates using --guide_seq SXX, --guide_seq TXX, etc.
 
 ## Postprocessing
-We provide a helper script called `merge_networks.py` that attempts to naively combine output networks by checking for sequence overlap and clashes. This is NOT an exhaustive sweep, so it will not return ALL possible networks, but a subset from a rapid sampling procedure.
-```
-python merge_networks.py --designs designs/ --output merged_designs/ --no_duplicates --max_order 5 --min_order 2
-```
+We provide a helper script called `merge_networks.py` that attempts to naively combine output networks by checking for sequence overlap and clashes. This is NOT an exhaustive sweep, so it will not return ALL possible networks, but a subset from a rapid sampling procedure. For example usage, see `examples/postprocessing/run_merge.sh`.
+
+When doing one-sided interface design, we may want to graft our output network back onto the wildtype target for downstream modeling. We provide a helper script called `graft_seq.py` to do this. For example usage, see `examples/postprocessing/run_graft.sh`
+
+The most common use for HBDesigner outputs is as input for traditional sequence design. To do this, we use LigandMPNN to design the remaining sequence, keeping the HBDesigner network residues fixed. For an example of this, see `examples/postprocessing/run_mpnn.sh`.
 
 ### Conditioning parameters:
 These are extra (optional) params you can use to help guide the model toward making specific types of networks more often.

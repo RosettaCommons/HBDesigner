@@ -1,4 +1,4 @@
-name: hbdesigner
+name: hbdesigner_gpu
 channels:
   - conda-forge
 dependencies:
