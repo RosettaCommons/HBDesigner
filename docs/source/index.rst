@@ -18,3 +18,4 @@ Make sure to read through the [HBDesigner README](https://github.com/Kuhlman-Lab
 
    cli_arguments.rst
    installation_guide.md
+   examples/index.rst
