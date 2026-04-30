@@ -32,12 +32,12 @@ class FileArgumentParser(argparse.ArgumentParser):
 
 def get_hbdes_parser() -> FileArgumentParser:
     parser = FileArgumentParser(
-        description="Parser for HBDesigner inference config files."
+        description="Required and optional arguments for running HBDesigner. For help on individual arguments, run with the --help flag or refer to the documentation."
     )
 
     # Filepaths
     parser.add_argument(
-        "--pdb", type=str, required=True, help="Input PDB file to process."
+        "--pdb", type=str, required=True, help="Relative file path and name of the PDB file to process."
     )
     parser.add_argument(
         "--design_model",
@@ -50,14 +50,14 @@ def get_hbdes_parser() -> FileArgumentParser:
     parser.add_argument(
         "--cpu",
         action="store_true",
-        help="Run inference on CPU by loading CPU-specific YAML configs.",
+        help="Run inference only on CPU by loading CPU-specific YAML configs. This is not recommended, as it will be much slower than running on GPU, but is available for users without access to a CUDA-enabled GPU. By default, the script will attempt to run on GPU if available.",
     )
     parser.add_argument(
         "--out_dir",
         type=str,
         required=False,
         default=os.getcwd(),
-        help="Output directory for saving new files. Defaults to current working directory.",
+        help="Relative path to output directory for saving new files. Defaults to current working directory. If the given directory does not exist, it will be created. Output files include designed HBNet PDB files and a summary CSV file with design metrics for each network.",
     )
     # Runtime optimization params
     parser.add_argument(
@@ -65,7 +65,7 @@ def get_hbdes_parser() -> FileArgumentParser:
         type=int,
         required=False,
         default=1,
-        help="Workers for parallelization (packing). Default is 1. More workers will speed up predictions.",
+        help="Workers for parallelization (packing). Default is 1. More workers will speed up predictions. The number available will depend on your system.",
     )
     # Sampling params
     parser.add_argument(
@@ -88,7 +88,7 @@ def get_hbdes_parser() -> FileArgumentParser:
         required=False,
         choices=range(2, 7),
         default=2,
-        help="Size of desired HBNet, in residues. Default is 2. Valid range is 2-6.",
+        help="Size of desired HBNet, in residues. Default is 2. Valid range is 2-6 (inclusive).",
     )
     parser.add_argument(
         "--T_range",
@@ -103,7 +103,7 @@ def get_hbdes_parser() -> FileArgumentParser:
         type=float,
         required=False,
         default=0.0,
-        help="Minimum burial for designable positions, as calculated by Rosetta's sidechain neighbor algorithm. Defaults to 0.0.",
+        help="Minimum burial for designable positions, as calculated by Rosetta's sidechain neighbor algorithm. Defaults to 0.0. See https://docs.rosettacommons.org/docs/latest/scripting_documentation/RosettaScripts/ResidueSelectors/ResidueSelectors#residueselectors_conformation-dependent-residue-selectors_layerselector or https://docs.rosettacommons.org/docs/latest/rosetta_basics/scoring/BuriedUnsatPenalty#algorithm for more information.",
     )
     # Conditional information
     parser.add_argument(
@@ -135,14 +135,14 @@ def get_hbdes_parser() -> FileArgumentParser:
         type=int,
         required=False,
         default=0,
-        help="Maximum buried unsats to allow in the network. Default is 0. Raising this will make filtering more permissive. ",
+        help="Maximum buried unsatisfied hydrogen atoms (BUNs, buried but not participating in a hydrogen bond) to allow in the network. Default is 0. Raising this will make filtering more permissive. ",
     )
     parser.add_argument(
         "--max_BUPHs",
         type=int,
         required=False,
         default=5,
-        help="Maximum buried unsat polar Hs to allow in the network. Default is 5. Raising this will make filtering more permissive. ",
+        help="Maximum buried unsatisfied polar hydrogen atoms (BUPHs, buried but not participating in a hydrogen bond) to allow in the network. Default is 5. Raising this will make filtering more permissive. ",
     )
     parser.add_argument(
         "--min_sat",
@@ -156,7 +156,7 @@ def get_hbdes_parser() -> FileArgumentParser:
         type=float,
         required=False,
         default=0.0,
-        help="Maximum h-bond energy to allow in the network. Default is 0.0. Raising this will make filtering more permissive.",
+        help="Maximum hydrogen bond energy to allow in the network. Default is 0.0. Raising this will make filtering more permissive.",
     )
     # Parsing params
     parser.add_argument(
@@ -164,21 +164,21 @@ def get_hbdes_parser() -> FileArgumentParser:
         type=str,
         required=False,
         default=None,
-        help="Option to symmetrize output networks for convenience. Specify symmetric chains as 'A,B;C,D' etc.",
+        help="Option to symmetrize output networks for convenience. Specify symmetric chains as 'A,B;C,D' to symmetrize A with B and C with D. If you wanted to symmetrize all four together, the input would be 'A,B,C,D'. By default, no symmetrization will be performed. ",
     )
     parser.add_argument(
         "--symm_file", 
         type=str,
         required=False,
         default=None,
-        help="Symmetry file to use for symmetrization. Only used for strict symmetry."
+        help="Symmetry file (.symm) to use for symmetrization. Only used for strict symmetry. You can use Rosetta's make_symmdef_file.pl script to generate a .symm file from your PDB."
     )
     parser.add_argument(
         "--sel_chains",
         required=False,
         type=str,
         default=None,
-        help="Option to select specific chain(s) to run HBDesigner on. Format: 'A,C'. Off by default (will use all chains).",
+        help="Option to select specific chain(s) to run HBDesigner on. Format: 'A,C'. Off by default (will use all chains). This option removes chains from the input file *before* they are passed to HBDesigner. HBDesigner will then graft chain B back in so the output still contains both chains.",
     )
     parser.add_argument(
         "--min_core_res",
@@ -206,7 +206,7 @@ def get_hbdes_parser() -> FileArgumentParser:
         required=False, 
         type=str,
         default=None,
-        help="Comma-separated list of chains to omit from design. Residues in these chains will not be eligible for use in designed networks. Example: A,C."
+        help="Comma-separated list of chains to omit from design. Residues in these chains will not be eligible for use in designed networks. Example: A,C. This option allows HBDesigner to see all of the chains (even the omitted ones) but prevents HBDesigner from using residues in the omitted chains to form the hydrogen bonding network. This is different from the --sel_chains option, which removes the omitted chains from the input file entirely (i.e. HBDesigner will not even see the omitted chains)."
     )
     parser.add_argument(
         "--omit_AA",
@@ -220,7 +220,7 @@ def get_hbdes_parser() -> FileArgumentParser:
         required=False,
         type=int,
         default=None,
-        help="Random seed for reproducible sampling. Default is no seed.",
+        help="Random seed for reproducible sampling. Default is no seed. Note that due to the use of parallelization and Rosetta scoring, results may not be exactly reproducible even with a set seed. Running with parallelization turned off ('n_workers' set to 0) will increase the likelihood of similar results between runs, but small energy changes will still be seen from Rosetta.",
     )
     parser.add_argument(
         "--design_model_ckpt", 
