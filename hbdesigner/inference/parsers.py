@@ -32,12 +32,13 @@ class FileArgumentParser(argparse.ArgumentParser):
 
 def get_hbdes_parser() -> FileArgumentParser:
     parser = FileArgumentParser(
+        prog='run_hbdesigner',
         description="Required and optional arguments for running HBDesigner. For help on individual arguments, run with the --help flag or refer to the documentation."
     )
 
     # Filepaths
     parser.add_argument(
-        "--pdb", type=str, required=True, help="Relative file path and name of the PDB file to process."
+        "--pdb", type=str, required=True, help="Relative file path to and name of the PDB file to process. Example: --pdb /path/to/1ABC.pdb"
     )
     parser.add_argument(
         "--design_model",
@@ -65,7 +66,7 @@ def get_hbdes_parser() -> FileArgumentParser:
         type=int,
         required=False,
         default=1,
-        help="Workers for parallelization (packing). Default is 1. More workers will speed up predictions. The number available will depend on your system.",
+        help="Workers for parallelization during packing. Default is 1. More workers will speed up predictions, typical values are between 8 and 24. The number available will depend on the number of CPU nodes you have allocated.",
     )
     # Sampling params
     parser.add_argument(
@@ -73,14 +74,14 @@ def get_hbdes_parser() -> FileArgumentParser:
         type=int,
         required=False,
         default=100,
-        help="Number of unique samples to generate. Default is 100. More samples will increase diversity but also increase inference time.",
+        help="Number of unique samples to generate before packing/scoring. Default is 100, typical values are 100-500 but higher values can be used if initial runs fail to form networks. More samples will increase diversity but also increase inference time.",
     )
     parser.add_argument(
         "--top_k",
         type=int,
         required=False,
         default=5,
-        help="How many unique samples to keep after ranking. Default is 5.",
+        help="How many unique samples to keep after ranking. Default is 5, typical values 5-25.",
     )
     parser.add_argument(
         "--n_res",
@@ -88,7 +89,7 @@ def get_hbdes_parser() -> FileArgumentParser:
         required=False,
         choices=range(2, 7),
         default=2,
-        help="Size of desired HBNet, in residues. Default is 2. Valid range is 2-6 (inclusive).",
+        help="Size of desired HBNet (the number of residues you want in your completed network(s)), in residues. Default is 2. Valid range is 2-6 (inclusive).",
     )
     parser.add_argument(
         "--T_range",
@@ -119,8 +120,8 @@ def get_hbdes_parser() -> FileArgumentParser:
         type=float,
         required=False,
         default=1e6,
-        help="Hard constraint on designable positions based on Cb distance "
-        "(Angstrom) from guide atom. Off by default.",
+        help="Hard distance constraint on designable positions based on Cb distance "
+        "(Angstrom) from guide atom. Off by default. Typically not necessary, but can be used to force location of designed network in difficult cases.",
     )
     parser.add_argument(
         "--guide_seq",
@@ -164,7 +165,7 @@ def get_hbdes_parser() -> FileArgumentParser:
         type=str,
         required=False,
         default=None,
-        help="Option to symmetrize output networks for convenience. Specify symmetric chains as 'A,B;C,D' to symmetrize A with B and C with D. If you wanted to symmetrize all four together, the input would be 'A,B,C,D'. By default, no symmetrization will be performed. ",
+        help="Option to symmetrize output networks after design for convenience. Specify symmetric chains as 'A,B;C,D' to symmetrize A with B and C with D. If you wanted to symmetrize all four together, the input would be 'A,B,C,D'. By default, no symmetrization will be performed. ",
     )
     parser.add_argument(
         "--symm_file", 
@@ -192,7 +193,7 @@ def get_hbdes_parser() -> FileArgumentParser:
         required=False, 
         type=str,
         default=None,
-        help="Comma-separated list of residues to use as anchor residues during design, in PDB chain/resnum format. Example: 'A12,B13,B49'."
+        help="Comma-separated list of residues to use as anchor residues during design, in PDB chain/resnum format. Example: 'A12,B13,B49'. All networks will contain the anchor residue(s)."
     )
     parser.add_argument(
         "--max_hb_score", 
@@ -227,14 +228,14 @@ def get_hbdes_parser() -> FileArgumentParser:
         required=False,
         type=str,
         default=None,
-        help="Path to custom design model checkpoint. If not specified, will use default checkpoint for the specified design model (e.g. 'design_020')."
+        help="Path to and file name of custom design model checkpoint. If not specified, will use default checkpoint for the specified design model (e.g. '/path/to/model_weights/design_020')."
     )
     parser.add_argument(
         "--packing_model_ckpt",
         required=False,
         type=str,
         default=None,
-        help="Path to custom packing model checkpoint. If not specified, will use default checkpoint."
+        help="Path to and file name of custom packing model checkpoint. If not specified, will use default checkpoint."
     )
 
     return parser

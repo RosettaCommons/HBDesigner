@@ -1,40 +1,13 @@
-# Installation Guide
+# Installation Issues
 
-## Contents
+See the README for information about the various ways to install HBDesigner. 
 
-
----
-## Installation with Conda
-
-### GPU
-
-### CPU
-
----
-## Installation with Mamba
-
-### GPU
-
-### CPU
-
----
-## Installation with uv
-
-### GPU
-
-### CPU
-
----
-## Installation with pixi
-
-### GPU
-### CPU
+These installation methods assume a system that is running CUDA 12.8 or greater, but have options for 12.4, if necessary. If you are running on a system that has a version of CUDA below 12.4 or a CUDA version too recent to be compatible with CUDA 12.8, see below for advice on what dependencies will need to be changed. 
 
 (cuda_version)=
 ## Adjusting for the CUDA version available on your system
-The various installation files (`env.yaml`, `pyproject.toml`) were created for systems running CUDA 12.8. 
 
-If your system has a more recent version of CUDA (e.g. 13.0) then these installation files may still work correctly. See the [Common Issues](#common-issues) section below if you are having trouble.
+If your system has a more recent version of CUDA (e.g. 13.0) then these installation files will likely still work correctly. See the [Common Issues](#common-issues) section below if you are having trouble.
 
 If your system has an older version of CUDA, then there are several dependencies you may need to change: 
 - The PyTorch source: 
@@ -77,7 +50,6 @@ If your system has an older version of CUDA, then there are several dependencies
     - torch-cluster
     - torch-scatter
 - You may need to find a version of triton that works with your PyTorch/CUDA combination, or you might be able to remove the version requirement from the triton listing. For CUDA 12.4, `triton==3.2.0` works. 
-- 
 
 ---
 (common-issues)=
