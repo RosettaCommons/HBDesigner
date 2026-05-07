@@ -1,5 +1,10 @@
 Command Line Options
 ====================
+The various command line options for running HBDesigner are described in detail below. For some general advice for how to use these options to maximize the success rate of HBDesigner, see the `Usage Advice`_ section at the end of this page.
+
+.. argparse::
+    :module: hbdesigner.inference.parsers
+    :func: get_hbdes_parser
 
 Usage Advice
 ------------
@@ -15,7 +20,3 @@ At larger ``--n_res``, packing is harder, so you will get fewer good designs per
     --n_res=6, --n_samples=1000
 
 Smaller amino acids, especially SER and THR, have notably higher success rates. This means that, if you don't care what amino acids are in your network, you can get higher success rates using ``--guide_seq SXX``, ``--guide_seq TXX``, etc.
-
-.. argparse::
-    :module: hbdesigner.inference.parsers
-    :func: get_hbdes_parser

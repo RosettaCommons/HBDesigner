@@ -24,7 +24,7 @@ For a system that is N-wise symmetric, the provided value of `n_res` must be div
 ---
 ## Examples
 
-Examples of using HBDesigner to design hydrogen bonding networks for protein interfaces can be found in examples/interface. The following examples use the 1YRK PDB file located in the `interface` folder. You can find its entry on the RCSB [here](https://www.rcsb.org/structure/1YRK). which contains a structure consisting of two chains and a ligand. Chain A is a protein kinase while chain B is a 13-residue peptide. The ligand is acetic acid.
+Examples of using HBDesigner to design hydrogen bonding networks for protein interfaces can be found in examples/interface. The following examples use the 1YRK PDB file located in the `interface` folder. You can find its entry on the RCSB [here](https://www.rcsb.org/structure/1YRK). This structure is composed of two chains and a ligand. Chain A is a protein kinase while chain B is a 13-residue peptide. The ligand is acetic acid.
 
 - One-sided: `interface/one_sided`
     - Residue B5 (serine) is selected as an anchor residue - this residue will be part of any designed hydrogen bonding networks

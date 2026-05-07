@@ -11,7 +11,7 @@ All of these examples use the provided 1PGA PDB file. You can find out more abou
 (unconditional_monomer_design)=
 ## Unconditional Monomer Design
 You will want to perform unconditional monomer design if you: 
-- want to create networks on a monomer or interface
+- want to create networks on a monomer 
 - do not have specific amino acids that need to be used to create these networks
 
 Unconditional monomer design only requires:

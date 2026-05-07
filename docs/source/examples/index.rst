@@ -22,11 +22,13 @@ HBDesigner produces two kinds of output:
 - A CSV file named "HBDes_stats.csv", which includes all of the scores and residue IDs of all designed networks. This includes networks that passed the scoring filters but didn't make the ``--top_k`` cutoff.
 
 HBDesigner will only output networks that pass all of its scoring filters and meet its definition of 'successful'. A 'successful' design meets the following criteria:
+
 - All network residues must be engaged in at least 1 sidechain-sidechain H-bond
 - All network residues must form a single contiguous network
-- The network passes the minimum thresholds for saturation, BUHs, BUPHs, etc. (see `Scoring parameters`_ below)
+- The network passes the minimum thresholds for saturation, BUHs, BUPHs, etc. (see :doc:`../cli_arguments` for how to set these thresholds)
 
 After filtering, HBDesigner will rank the remaining networks using various score terms, with the following priority:
+
 1. ``buried_unsat_Hpol`` (buried unsatisfied polar H atoms): the fewer the better.
 2. ``saturation``: the fraction of total h-bonding "capacity" that is being used across all network residue sc atoms: the higher the better.
 3. HBond Score (``HB_Score_full``): the change in Rosetta energy provided by the designed network, calculated against an identical PolyG backbone: the lower (more negative) the better.
