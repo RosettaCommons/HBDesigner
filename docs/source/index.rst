@@ -6,11 +6,11 @@
 HBDesigner Documentation
 ========================
 
-Welcome to the official documentation for [HBDesigner](https://github.com/Kuhlman-Lab/HBDesigner). 
+Welcome to the official documentation for `HBDesigner <https://github.com/Kuhlman-Lab/HBDesigner>`_. 
 
 HBDesigner is a machine learning tool that designs highly-connected hydrogen bonding networks based on user-defined constraints and an input protein backbone. 
 
-Make sure to read through the [HBDesigner README](https://github.com/Kuhlman-Lab/HBDesigner/blob/main/README.md) for an overview of the tool, its features, and how to get started.
+Make sure to read through the `HBDesigner README <https://github.com/Kuhlman-Lab/HBDesigner/blob/main/README.md>`_ for an overview of the tool, its features, and how to get started.
 
 .. toctree::
    :maxdepth: 1
@@ -18,3 +18,5 @@ Make sure to read through the [HBDesigner README](https://github.com/Kuhlman-Lab
 
    cli_arguments.rst
    installation_guide.md
+   models.md
+   examples/index.rst

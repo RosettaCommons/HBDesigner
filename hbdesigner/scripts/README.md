@@ -28,7 +28,7 @@ To preprocess the full dataset, run this for all 243 "chunks" of 1000 assemblies
 source ~/.bashrc
 mamba activate hbdesigner
 
-python extract_hbnet.py \
+python extract_hbnets.py \
     --data_dir /data/pdb_2021aug02/preprocessed \
     --chunk $SLURM_ARRAY_TASK_ID \
     --chunk_size 1000
@@ -58,7 +58,7 @@ python evaluate_hbdesigner.py \
     --design_ckpt $design_ckpt
 
 # Packing-only evaluation
-python evaluate_packer.py \
+python evaluate_hbpacker.py \
     --pack_config $cfg \
     --pack_ckpt $ckpt \
     --num_workers 8 \
