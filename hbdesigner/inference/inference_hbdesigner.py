@@ -246,7 +246,7 @@ class HBDesRunner:
         # Retrieve model weights and configurations
         pack_cfg_name = "pack_cpu.yaml" if self.opts.cpu else "pack.yaml"
         design_cfg_name = (
-            f"{self.opts.design_model}_cpu.yaml" if self.opts.cpu else f"{self.opts.design_model}.yaml"
+            f"design_020_cpu.yaml" if self.opts.cpu else f"design_020.yaml"
         )
         self.opts.pack_cfg = os.path.join(Path(__file__).parents[2], f"model_weights/{pack_cfg_name}")
         # Override model weight paths if provided by user, otherwise use defaults
