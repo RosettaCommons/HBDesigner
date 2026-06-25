@@ -67,5 +67,15 @@ The HBDesigner source code and model weights are provided under an MIT license (
 
 If you find HBDesigner useful for your own work, please use the following citation:
 ```
-TBD
+@article {Dieckhaus2026.06.08.730848,
+	author = {Dieckhaus, Henry and Harvey, Brock T. and Mulikova, Tomiris and Horenstein, Jessica T. and Nicely, Nathan I. and Randolph, Nicholas Z. and Kuhlman, Brian},
+	title = {Deep learning based design of buried hydrogen bond networks with HBDesigner},
+	elocation-id = {2026.06.08.730848},
+	year = {2026},
+	doi = {10.64898/2026.06.08.730848},
+	publisher = {Cold Spring Harbor Laboratory},
+	URL = {https://www.biorxiv.org/content/early/2026/06/11/2026.06.08.730848},
+	eprint = {https://www.biorxiv.org/content/early/2026/06/11/2026.06.08.730848.full.pdf},
+	journal = {bioRxiv}
+}
 ```
