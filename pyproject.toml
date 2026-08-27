@@ -100,7 +100,11 @@ pyrosetta = { url = "https://west.rosettacommons.org/pyrosetta/release/release/P
 
 [tool.pixi.workspace]
 channels = ["conda-forge", "bioconda"]
-platforms = ["linux-64"]
+platforms = [
+  "linux-64",
+  { name = "linux-64-cuda-124", platform = "linux-64", cuda = "12.4" },
+  { name = "linux-64-cuda-130", platform = "linux-64", cuda = "13.0" },
+]
 
 [tool.pixi.dependencies]
 python = "3.10.*"
@@ -119,30 +123,6 @@ ruff = "*"
 hydride = ">=1.1.2,<2"
 biotite = ">=1.2.0,<2"
 reduce = "*"
-
-[tool.pixi.feature.cpu.dependencies]
-pytorch = "<=2.5"
-pytorch_geometric = "==2.7.0"
-pytorch_scatter = "*"
-pytorch_cluster = "*"
-
-[tool.pixi.feature.gpu.system-requirements]
-cuda = "12.4"
-
-[tool.pixi.feature.gpu-cu124.system-requirements]
-cuda = "12.4"
-
-[tool.pixi.feature.gpu-cu130.system-requirements]
-cuda = "13.0"
-
-[tool.pixi.feature.gpu-cu130.pypi-dependencies]
-torch = { url = "https://download.pytorch.org/whl/cu130/torch-2.9.0%2Bcu130-cp310-cp310-manylinux_2_28_x86_64.whl" }
-torch-geometric = "==2.7.0"
-torch-cluster = { url = "https://data.pyg.org/whl/torch-2.9.0%2Bcu130/torch_cluster-1.6.3%2Bpt29cu130-cp310-cp310-linux_x86_64.whl" }
-torch-scatter = { url = "https://data.pyg.org/whl/torch-2.9.0%2Bcu130/torch_scatter-2.1.2%2Bpt29cu130-cp310-cp310-linux_x86_64.whl" }
-
-[tool.pixi.feature.gpu-cu130.pypi-options]
-no-build-isolation = ["torch-cluster", "torch-scatter"]
 
 [tool.pixi.feature.dev.tasks]
 test = "pytest"
