@@ -9,7 +9,7 @@ HBDesigner is an algorithm that designs highly-connected hydrogen bonding networ
 HBDesigner can be installed using `mamba`, `uv`, or `Pixi`. 
 ```
 # first, clone the repo 
-git clone https://github.com/Kuhlman-Lab/HBDesigner.git
+git clone https://github.com/RosettaCommons/HBDesigner.git
 cd HBDesigner/
 ```
 To create a virtual environment with `mamba` for use on a GPU or CPU, respectively:
@@ -57,7 +57,9 @@ A detailed guide for running HBDesigner on your protein(s) of interest can be fo
 
 ## Repeating the training and validation experiments
 
-The preprocessed HBDesigner training dataset can be obtained here (TBD). For developers interested in replicating or extending this work, we provide details on preprocessing, training, and validation at `hbdesigner/scripts/README.md`.
+The preprocessed HBDesigner training dataset can be obtained [here](https://doi.org/10.5281/zenodo.22129494). For developers interested in replicating or extending this work, we provide details on preprocessing, training, and validation at `hbdesigner/scripts/README.md`.
+
+Eval datasets and scripts for reproducing benchmarks in the HBDesigner paper can be found [here](https://doi.org/10.5281/zenodo.21629090).
 
 ## License
 
