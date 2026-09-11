@@ -364,6 +364,12 @@ def score_protein(p: Protein) -> Dict[str, float]:
         Dict[str, float]: Dict of single protein metrics and their labels.
     """
 
+    # Guide atom (if present) is stored in hetatm_dict, which masking below drops
+    guide_atom_xyz = None
+    if p.hetatm_dict != {} and "V1" in p.hetatm_dict["atom_name"]:
+        guide_idx = np.where(p.hetatm_dict["atom_name"] == "V1")[0][0]
+        guide_atom_xyz = p.hetatm_dict["atom_xyz"][guide_idx]
+
     # Get bonds and energy metrics from Rosetta
     bond_list, rosetta_stats = rosetta_hbond_detect(
         p,
@@ -402,6 +408,12 @@ def score_protein(p: Protein) -> Dict[str, float]:
     cd = cdist(cb_xyz, cb_xyz)
     max_Cb_dist = np.max(np.triu(cd))
 
+    # Distance from network Cb centroid to guide atom, if one was provided
+    displacement = None
+    if guide_atom_xyz is not None:
+        cb_centroid = np.mean(cb_xyz, axis=0)
+        displacement = float(np.linalg.norm(cb_centroid - guide_atom_xyz))
+
     # Check if residue aatypes are valid
     valid_res = np.array([rc.restype_order[r] for r in rc.restype_hb_sc])
     vmask = np.sum(p.aatype == valid_res[:, None], axis=0) > 0
@@ -426,6 +438,7 @@ def score_protein(p: Protein) -> Dict[str, float]:
         "total_res": total_res,
         "max_Cb_dist": max_Cb_dist,
         "valid_res_frac": valid_res_frac,
+        "displacement": displacement,
     }
     score_info.update(rosetta_stats)
 
@@ -885,19 +898,83 @@ def calc_seq_rec_batched(
     assert (pred_seq != rc.restype_num).sum() == (true_seq != rc.restype_num).sum()
 
     # Calculate pos recovery per sample
+    # NOTE: scatter with reduce="sum" on a bool tensor stays bool (saturates at True),
+    # so all summed quantities below must be cast to float first.
     mask = true_pos.clone()
     pos_rec_per_samp = scatter(
-        pred_pos[mask] == true_pos[mask], aatype_batch[mask], dim=0, reduce="sum"
+        (pred_pos[mask] == true_pos[mask]).to(torch.float32), aatype_batch[mask], dim=0, reduce="sum"
     )  # [B]
-    pos_per_samp = scatter(pred_pos, aatype_batch, dim=0, reduce="sum")  # [B]
+    pos_per_samp = scatter(pred_pos.to(torch.float32), aatype_batch, dim=0, reduce="sum")  # [B]
     pos_rec = pos_rec_per_samp / (pos_per_samp + 1e-8)  # [B]
 
     # Calculate seq recovery per sample
     rec_mask = (pred_seq[mask] == true_seq[mask]) * (pred_pos[mask] == true_pos[mask])
-    seq_rec_per_samp = scatter(rec_mask, aatype_batch[mask], dim=0, reduce="sum")  # [B]
+    seq_rec_per_samp = scatter(rec_mask.to(torch.float32), aatype_batch[mask], dim=0, reduce="sum")  # [B]
     seq_rec = seq_rec_per_samp / (pos_per_samp + 1e-8)  # [B]
 
     return pos_rec, seq_rec
+
+
+def calc_unordered_seq_rec_batched(
+    pred_pos: torch.tensor,
+    true_pos: torch.tensor,
+    pred_seq: torch.tensor,
+    true_seq: torch.tensor,
+    aatype_batch: torch.tensor,
+) -> torch.tensor:
+    """
+    Calculates unordered (position-agnostic) seq recovery on batched predictions.
+
+    Unlike calc_seq_rec_batched, this ignores which specific position each residue
+    was assigned to and instead checks whether the predicted network's multiset of
+    residue types matches the native network's multiset of residue types.
+
+    Arguments:
+        pred_pos (torch.tensor): Predicted position vector of shape [L] for the full batch.
+        true_pos (torch.tensor): True position vector of shape [L] for the full batch.
+        pred_seq (torch.tensor): Predicted seq vector of shape [L] for the full batch.
+        true_seq (torch.tensor): True seq vector of shape [L] for the full batch.
+        aatype_batch (torch.tensor): Batch indexing vector of shape [L] for scatter ops.
+
+    Returns:
+        torch.tensor: unordered seq recovery of each sample, shaped [B].
+    """
+    # Check that vectors are comparable
+    assert (
+        pred_pos.numel()
+        == true_pos.numel()
+        == pred_seq.numel()
+        == true_seq.numel()
+        == aatype_batch.numel()
+    )
+    num_graphs = int(aatype_batch.max().item()) + 1
+
+    # Count occurrences of each aatype per sample by flattening (sample, aatype) into
+    # a single scatter index, for both the true and predicted networks
+    true_idx = aatype_batch[true_pos] * rc.restype_num + true_seq[true_pos]
+    true_counts = scatter(
+        torch.ones_like(true_idx, dtype=torch.float32),
+        true_idx,
+        dim=0,
+        reduce="sum",
+        dim_size=num_graphs * rc.restype_num,
+    ).view(num_graphs, rc.restype_num)
+
+    pred_idx = aatype_batch[pred_pos] * rc.restype_num + pred_seq[pred_pos]
+    pred_counts = scatter(
+        torch.ones_like(pred_idx, dtype=torch.float32),
+        pred_idx,
+        dim=0,
+        reduce="sum",
+        dim_size=num_graphs * rc.restype_num,
+    ).view(num_graphs, rc.restype_num)
+
+    # Multiset intersection: for each sample, how many residues of each aatype
+    # are shared between the predicted and native networks, regardless of position
+    matched_per_samp = torch.minimum(true_counts, pred_counts).sum(dim=1)  # [B]
+    pos_per_samp = scatter(pred_pos.float(), aatype_batch, dim=0, reduce="sum", dim_size=num_graphs)  # [B]
+    unordered_seq_rec = matched_per_samp / (pos_per_samp + 1e-8)  # [B]
+    return unordered_seq_rec
 
 
 def initialize_rosetta(mode: str = "fast", seed: int = None) -> None:

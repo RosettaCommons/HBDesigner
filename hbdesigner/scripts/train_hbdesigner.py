@@ -29,6 +29,7 @@ from hbdesigner.data.hbnet import (
     get_guide_atom,
     get_seq_cond,
     calc_seq_rec_batched,
+    calc_unordered_seq_rec_batched,
     crop_by_distance,
     score_protein,
 )
@@ -55,10 +56,14 @@ class HBDesignerDataset(torch.utils.data.IterableDataset):
 
     """
 
-    def __init__(self, cfg: TrainConfig, split: str = "train"):
+    def __init__(self, cfg: TrainConfig, split: str = "train", n_anchor_res: int = 0):
         # Load metadata
         self.cfg = cfg
         self.split = split
+        # Number of network residues to treat as already-decided on the test split, so
+        # that featurize() leaves them out of nll_mask and sample() completes the rest.
+        # Not part of TrainConfig since it's only meaningful for eval scripts.
+        self.n_anchor_res = n_anchor_res
 
         if self.cfg.model.model_name == "HBDesigner":
             self.model_cfg = self.cfg.model.hbdesigner
@@ -379,9 +384,12 @@ class HBDesignerDataset(torch.utils.data.IterableDataset):
         # Do step and residue sampling for training
         n_res = hbnet_pos.size
 
-        # Always run test from tstep 0 to get accurate cond info
+        # On test, anchor n_anchor_res residues (already decided) and complete the rest.
+        # Skip networks too small to have any non-anchor residues left to design.
         if self.split == "test":
-            tstep = 0
+            tstep = self.n_anchor_res
+            if n_res <= tstep:
+                return
         else:
             tstep = random.randint(0, n_res - 1)
 
@@ -681,8 +689,8 @@ class HBDesignerTrainer(SupervisedTrainer):
             worker_init_fn=worker_init,
         )
 
-    def build_test_data_loader(self) -> DataLoader:
-        self.test_data = HBDesignerDataset(self.cfg, split="test")
+    def build_test_data_loader(self, n_anchor_res: int = 0) -> DataLoader:
+        self.test_data = HBDesignerDataset(self.cfg, split="test", n_anchor_res=n_anchor_res)
         return self._make_data_loader(self.test_data)
 
     @torch.no_grad()
@@ -691,6 +699,7 @@ class HBDesignerTrainer(SupervisedTrainer):
         batch: gd.Batch,
         seq_sample_temp: float = 0.1,
         res_sample_temp: float = 0.1,
+        ignore_seq_cond_mask: bool = False,
     ) -> Tuple[gd.Batch, Dict[int, any]]:
         """
         Sample batch with self.model and update the batch object w/network information.
@@ -699,6 +708,8 @@ class HBDesignerTrainer(SupervisedTrainer):
             batch (gd.Batch): Full batch of data for sampling.
             seq_sample_temp (float): Sampling temperature for seq (aatype) decoding.
             res_sample_temp (float): Sampling temperature for res (position/stop action) decoding.
+            ignore_seq_cond_mask (bool): If True, don't hard-constrain sampling to the seq cond
+                aatype budget (still restricted to the 11 HB-capable residues). Defaults to False.
 
         Returns:
             gd.Batch: Updated batch ready for packing/scoring.
@@ -709,6 +720,7 @@ class HBDesignerTrainer(SupervisedTrainer):
             batch.to(self.cfg.device),
             seq_sample_temp=seq_sample_temp,
             res_sample_temp=res_sample_temp,
+            ignore_seq_cond_mask=ignore_seq_cond_mask,
         )
         # Apply results to each scaffold in the batch
         b_list = batch.to_data_list()
@@ -728,6 +740,7 @@ class HBDesignerTrainer(SupervisedTrainer):
         seq_sample_temp: float = 0.1,
         res_sample_temp: float = 0.1,
         n_workers: int = 1,
+        ignore_seq_cond_mask: bool = False,
     ) -> Dict[str, Any]:
         """
         Sample, pack, and score a Batch of Proteins using HBNet metrics.
@@ -739,6 +752,8 @@ class HBDesignerTrainer(SupervisedTrainer):
             seq_sample_temp (float): Sampling temperature for restype decoding. Defaults to 0.1.
             res_sample_temp (float): Sampling temperature for network position decoding. Defaults to 0.1.
             n_workers (int): Number of workers for Rosetta parallel packing. Defaults to 1.
+            ignore_seq_cond_mask (bool): If True, don't hard-constrain sampling to the seq cond
+                aatype budget (still restricted to the 11 HB-capable residues). Defaults to False.
 
         Returns:
             info (Dict[str, any]): Set of metrics for the batch.
@@ -749,11 +764,15 @@ class HBDesignerTrainer(SupervisedTrainer):
         native_seq = deepcopy(b.aatype_gt)
         native_pos = native_seq != rc.restype_num
         aatype_batch = b.aatype_batch.clone()
+        # Anchor residues (already decided pre-sampling) aren't actually "predicted",
+        # so recovery metrics restricted to newly-designed residues exclude them below
+        anchor_mask = b.done_mask.clone().bool()
 
         b, results = self.sample_batch(
             b,
             seq_sample_temp=seq_sample_temp,
             res_sample_temp=res_sample_temp,
+            ignore_seq_cond_mask=ignore_seq_cond_mask,
         )
         pred_seq = b.aatype.clone().to(native_seq.device)
         pred_seq[pred_seq == rc.restype_order["G"]] = rc.restype_num
@@ -766,14 +785,44 @@ class HBDesignerTrainer(SupervisedTrainer):
         test_info["pos_rec"] = pos_rec.tolist()
         test_info["seq_rec"] = seq_rec.tolist()
 
-        # Collect avg prob/log-prob of positions
+        # Unordered seq recovery: does the predicted network contain the same aatypes
+        # as the native network, regardless of position/order within the network
+        unordered_seq_rec = calc_unordered_seq_rec_batched(
+            pred_pos, native_pos, pred_seq, native_seq, aatype_batch
+        )
+        test_info["unordered_seq_rec"] = unordered_seq_rec.tolist()
+
+        # Same recovery metrics restricted to newly-designed residues, excluding anchors.
+        # With n_anchor_res=0 these are identical to the metrics above.
+        anchor_mask = anchor_mask.to(native_pos.device)
+        new_native_pos = native_pos & ~anchor_mask
+        new_pred_pos = pred_pos & ~anchor_mask
+        pos_rec_new, seq_rec_new = calc_seq_rec_batched(
+            new_pred_pos, new_native_pos, pred_seq, native_seq, aatype_batch
+        )
+        test_info["pos_rec_new"] = pos_rec_new.tolist()
+        test_info["seq_rec_new"] = seq_rec_new.tolist()
+
+        unordered_seq_rec_new = calc_unordered_seq_rec_batched(
+            new_pred_pos, new_native_pos, pred_seq, native_seq, aatype_batch
+        )
+        test_info["unordered_seq_rec_new"] = unordered_seq_rec_new.tolist()
+
+        # Collect avg prob/log-prob of positions, and predicted network size with/without anchors
         net_res_probs = []
         seq_probs = []
+        n_res_pred = []
+        n_res_pred_new = []
         for i in range(b.num_graphs):
             net_res_probs.append(np.mean(results[i]["net_res_probs"].tolist()))
             seq_probs.append(np.mean(results[i]["seq_probs"].tolist()))
+            samp_mask = aatype_batch == i
+            n_res_pred.append(int(pred_pos[samp_mask].sum()))
+            n_res_pred_new.append(int(new_pred_pos[samp_mask].sum()))
         test_info["net_res_probs"] = net_res_probs
         test_info["seq_probs"] = seq_probs
+        test_info["n_res_pred"] = n_res_pred
+        test_info["n_res_pred_new"] = n_res_pred_new
 
         # Need to adjust gd.Batch to be compatible with HBPacker
         pack_ds = pack_trainer.test_data
@@ -824,6 +873,7 @@ class HBDesignerTrainer(SupervisedTrainer):
         dump: bool = False,
         first_n: int = None,
         verbose: bool = False,
+        ignore_seq_cond_mask: bool = False,
     ) -> Dict[str, any]:
         """
         Run test loop on the specified DataLoader.
@@ -839,6 +889,8 @@ class HBDesignerTrainer(SupervisedTrainer):
             n_workers (int): Number of workers available for Rosetta packing job. Defaults to 1.
             dump (bool): Whether to dump the packed PDBs after scoring. Defaults to False.
             verbose (bool): Whether to dump per-network stats to CSV. Defaults to False.
+            ignore_seq_cond_mask (bool): If True, don't hard-constrain sampling to the seq cond
+                aatype budget (still restricted to the 11 HB-capable residues). Defaults to False.
 
         Returns:
             Dict[str, any]: Dictionary of test metrics.
@@ -853,6 +905,7 @@ class HBDesignerTrainer(SupervisedTrainer):
                 res_sample_temp=res_sample_temp,
                 n_workers=n_workers,
                 pack_trainer=pack_trainer,
+                ignore_seq_cond_mask=ignore_seq_cond_mask,
             )
             # Save PDBs to disk, if requested
             if dump:
@@ -901,7 +954,7 @@ class HBDesignerTrainer(SupervisedTrainer):
             map_location = {"cuda:0": f"cuda:{self.rank}"}
         else:
             map_location = "cpu"
-        state = torch.load(ckpt_path, map_location=map_location)
+        state = torch.load(ckpt_path, map_location=map_location, weights_only=False)
 
         self.model.load_state_dict(state["model_state_dict"])
         self.model.to(self.device)

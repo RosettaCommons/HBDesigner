@@ -284,6 +284,8 @@ class HBPackerDataset(HBDesignerDataset):
                     torch.float32
                 ),  # [L, 4]
                 chi_mask=torch.from_numpy(chi_mask).to(torch.float32),  # [L]
+                # No symmetry info available here; treat each packable residue as its own group
+                symmetry_idx=torch.arange(chi_mask_bool.sum(), dtype=torch.long),  # [n_packable]
             )
             protein_data["c_idx"] = protein_data["chain_index"]
             protein_data["guide_atom_xyz"] = b_i.guide_atom_xyz

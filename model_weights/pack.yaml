@@ -71,7 +71,7 @@ model:
     orient_msd_weight: 0.2
     reweight_chi_mse: true
     num_recycles: 3
-    data_location: /work/users/d/i/dieckhau/pdb_2021aug02_hbdesigner4/
+    data_location: /work/users/d/i/dieckhau/datasets/pdb_2021aug02_hbdesigner4/
     inter_weight: 1.0
     hbnet_pct: 0.0
     batch_size: 10000
