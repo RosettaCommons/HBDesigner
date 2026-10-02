@@ -101,6 +101,37 @@ if __name__ == "__main__":
         default=1,
         help="Number of repeats for error bars. Defaults to 1.",
     )
+    parser.add_argument(
+        "--guide_atom_cond",
+        action="store_true",
+        help="Whether to enable guide atom conditioning for all eval samples. Defaults to False (off).",
+    )
+    parser.add_argument(
+        "--seq_cond",
+        action="store_true",
+        help="Whether to enable sequence conditioning for all eval samples. Defaults to False (off).",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Whether to save per-network stats to a CSV (hbdes_eval_data.csv). Defaults to False.",
+    )
+    parser.add_argument(
+        "--ignore_seq_cond_mask",
+        action="store_true",
+        help="Whether to disable the hard seq cond aatype constraint during sampling, still "
+        "restricting to the 11 HB-capable residues but without forcing the conditioned "
+        "identities/counts. Defaults to False (off).",
+    )
+    parser.add_argument(
+        "--n_anchor_res",
+        type=int,
+        default=0,
+        help="Number of network residues to anchor (treat as already decided) before "
+        "sampling completes the rest of the network. Must be between 0 and "
+        "hbdesigner.max_res - 1. Networks with fewer than n_anchor_res + 1 residues are "
+        "skipped. Defaults to 0 (design the whole network from scratch).",
+    )
     args = parser.parse_args()
     print("Args:", args)
 
@@ -122,10 +153,17 @@ if __name__ == "__main__":
     design_config.model.hbdesigner.rescore = False
     design_config.model.hbdesigner.rescore_filter = False
 
+    if not (0 <= args.n_anchor_res <= design_config.model.hbdesigner.max_res - 1):
+        parser.error(
+            "--n_anchor_res must be between 0 and "
+            f"{design_config.model.hbdesigner.max_res - 1} (hbdesigner.max_res - 1), "
+            f"got {args.n_anchor_res}."
+        )
+
     # Conditioning info params
-    design_config.model.hbdesigner.guide_atom_pct = 0.0
+    design_config.model.hbdesigner.guide_atom_pct = 1.0 if args.guide_atom_cond else 0.0
     design_config.model.hbdesigner.guide_atom_sigma = 4.0
-    design_config.model.hbdesigner.seq_cond_pct = 0.0
+    design_config.model.hbdesigner.seq_cond_pct = 1.0 if args.seq_cond else 0.0
     design_config.model.hbdesigner.seq_cond_unk_pct = 0.0
 
     # Eval params
@@ -171,7 +209,7 @@ if __name__ == "__main__":
     for r in range(args.repeats):
         t0 = time.time()
         seed_everything(seeds[r])
-        test_dl = design_trainer.build_test_data_loader()
+        test_dl = design_trainer.build_test_data_loader(n_anchor_res=args.n_anchor_res)
         test_dl_pack = pack_trainer.build_test_data_loader()
         print(f"Starting test loop # {r + 1} / {args.repeats}")
 
@@ -183,8 +221,9 @@ if __name__ == "__main__":
             first_n=args.first_n,
             seq_sample_temp=args.seq_temp,
             res_sample_temp=args.pos_temp,
-            verbose=False,
+            verbose=args.verbose,
             pack_trainer=pack_trainer,
+            ignore_seq_cond_mask=args.ignore_seq_cond_mask,
         )
         t1 = time.time()
         elapsed = round(t1 - t0)

@@ -3,6 +3,7 @@ from functools import partial
 from multiprocessing import Pool
 from typing import Dict, List, Sequence, Tuple, Optional
 import os
+import shutil
 import numpy as np
 import pyrosetta
 import time
@@ -32,8 +33,12 @@ import hbdesigner.data.residue_constants as rc
 from hbdesigner.data.features import impute_CB
 from hbdesigner.data.protein import Protein
 
-REDUCE_EXE=os.path.join(os.path.dirname(os.path.dirname(__file__)), "reduce/reduce_src/reduce")
-HET_DICT = os.path.join(os.path.dirname(os.path.dirname(__file__)), "reduce/reduce_wwPDB_het_dict.txt")
+# Reduce is installed via conda/pixi (see pyproject.toml); override with $REDUCE_EXE if it isn't on PATH
+REDUCE_EXE = os.environ.get("REDUCE_EXE") or shutil.which("reduce") or "reduce"
+HET_DICT = os.environ.get("REDUCE_HET_DICT") or os.path.join(
+    os.path.dirname(os.path.dirname(os.path.realpath(shutil.which(REDUCE_EXE) or REDUCE_EXE))),
+    "share/reduce/reduce_wwPDB_het_dict.txt",
+)
 
 
 def batch_to_proteins(batch: gd.Batch) -> Tuple[List[Protein], List[gd.Data]]:
@@ -200,7 +205,7 @@ def get_satisfaction(
 
 def rosetta_hbond_detect(
     p: Protein, max_energy: float = 0.0, optH: bool = True, optH_MCA: bool = True,
-) -> List[Tuple[int, int]]:
+) -> Tuple[List[Tuple[int, int]], List[Tuple[int, int]], Dict[str, float]]:
     """
     Detect Rosetta HBonds based on energy threshold.
 
@@ -209,6 +214,12 @@ def rosetta_hbond_detect(
         max_energy (float): Max energy to consider a 'valid' HBond. Larger is more permissive. Default is 0.0.
         optH (bool): Whether to let Rosetta re-optimize the hydrogens in the input Protein. Default is True.
         optH_MCA (bool): Whether to use more rigorous but slower optH MCA protocol. Default is True.
+
+    Returns:
+        pair_list (List[Tuple[int, int]]): (acc_res, don_res) pairs for sidechain-sidechain HBonds.
+        bb_sc_pair_list (List[Tuple[int, int]]): (acc_res, don_res) pairs for backbone-sidechain HBonds
+            (either the acceptor or the donor hydrogen is a backbone atom).
+        stats (Dict[str, float]): Energy/satisfaction stats for the pose.
     """
     t0 = time.time()
     # Configure scoring settings, if not already set
@@ -221,6 +232,7 @@ def rosetta_hbond_detect(
     # Set up polyG backbone for energy calc
     pose, polyG_pose = Pose(), Pose()
     pair_list = []
+    bb_sc_pair_list = []
     try:
         pose_from_pdbstring(pose, p.to_pdb(unk_to_gly=True))
         # Make PolyG pose for comparison
@@ -233,20 +245,24 @@ def rosetta_hbond_detect(
 
     except RuntimeError:
         print("Rosetta failed to accept PDB!")
-        return pair_list
+        return pair_list, bb_sc_pair_list, {}
 
     # Need to apply FA scorefxn to populate HBondSet
     scorefxn = get_fa_scorefxn()
     scorefxn(pose)
-    hbondset = pose.get_hbonds(exclude_bb=True, exclude_bsc=True, exclude_scb=True)
+    # Exclude bb-bb only here; sc-sc and bb-sc bonds are split below by atom identity
+    hbondset = pose.get_hbonds(exclude_bb=True)
     hbonds = hbondset.hbonds()
 
-    # Collect HBonds
+    # Collect HBonds, splitting sidechain-sidechain from backbone-sidechain
     for bond in hbonds:
         # Convert from Pose to Protein numbering
         acc_res = int(bond.acc_res()) - 1
         don_res = int(bond.don_res()) - 1
-        pair_list.append((acc_res, don_res))
+        if bond.acc_atm_is_backbone() or bond.don_hatm_is_backbone():
+            bb_sc_pair_list.append((acc_res, don_res))
+        else:
+            pair_list.append((acc_res, don_res))
 
     seq, seq_polyG = pose.sequence(), polyG_pose.sequence()
     net_idx = [i for i, (s, sg) in enumerate(zip(seq, seq_polyG)) if s != sg]
@@ -275,7 +291,7 @@ def rosetta_hbond_detect(
     stats.update(get_satisfaction(pose))
     t1 = time.time()
     stats["score_time"] = (t1 - t0)
-    return pair_list, stats
+    return pair_list, bb_sc_pair_list, stats
 
 
 def biotite_hbond_detect(
@@ -364,8 +380,14 @@ def score_protein(p: Protein) -> Dict[str, float]:
         Dict[str, float]: Dict of single protein metrics and their labels.
     """
 
+    # Guide atom (if present) is stored in hetatm_dict, which masking below drops
+    guide_atom_xyz = None
+    if p.hetatm_dict != {} and "V1" in p.hetatm_dict["atom_name"]:
+        guide_idx = np.where(p.hetatm_dict["atom_name"] == "V1")[0][0]
+        guide_atom_xyz = p.hetatm_dict["atom_xyz"][guide_idx]
+
     # Get bonds and energy metrics from Rosetta
-    bond_list, rosetta_stats = rosetta_hbond_detect(
+    bond_list, bb_sc_bond_list, rosetta_stats = rosetta_hbond_detect(
         p,
         max_energy=0.0,
         optH=True,
@@ -387,7 +409,7 @@ def score_protein(p: Protein) -> Dict[str, float]:
     chains_used = np.unique(p.chain_index).size
     used_all_chains = float(chains_used == chains_total)
 
-    # Count motif nodes and edges
+    # Count motif nodes and edges (sidechain-sidechain HBonds)
     hbond_res = []
     for b in bond_list:
         hbond_res.extend(list(b))
@@ -396,11 +418,25 @@ def score_protein(p: Protein) -> Dict[str, float]:
     total_res = p.n_res
     hbond_res_frac = hbond_res / total_res
 
+    # Same counts for backbone-sidechain HBonds
+    hbond_bb_sc_res = []
+    for b in bb_sc_bond_list:
+        hbond_bb_sc_res.extend(list(b))
+    hbond_bb_sc_res = np.unique(hbond_bb_sc_res).size
+    hbond_bb_sc_bonds = len(bb_sc_bond_list)
+    hbond_bb_sc_res_frac = hbond_bb_sc_res / total_res
+
     # Calculate max pairwise distance b/w motif Cb atoms
     bb_xyz = p.atom27_xyz[:, :4, :]
     cb_xyz = impute_CB(bb_xyz[:, 0], bb_xyz[:, 1], bb_xyz[:, 2])
     cd = cdist(cb_xyz, cb_xyz)
     max_Cb_dist = np.max(np.triu(cd))
+
+    # Distance from network Cb centroid to guide atom, if one was provided
+    displacement = None
+    if guide_atom_xyz is not None:
+        cb_centroid = np.mean(cb_xyz, axis=0)
+        displacement = float(np.linalg.norm(cb_centroid - guide_atom_xyz))
 
     # Check if residue aatypes are valid
     valid_res = np.array([rc.restype_order[r] for r in rc.restype_hb_sc])
@@ -421,11 +457,15 @@ def score_protein(p: Protein) -> Dict[str, float]:
         "hbond_res_frac": hbond_res_frac,
         "hbond_res": hbond_res,
         "hbond_bonds": hbond_bonds,
+        "hbond_bb_sc_res_frac": hbond_bb_sc_res_frac,
+        "hbond_bb_sc_res": hbond_bb_sc_res,
+        "hbond_bb_sc_bonds": hbond_bb_sc_bonds,
         "chains_used": float(chains_used),
         "used_all_chains": used_all_chains,
         "total_res": total_res,
         "max_Cb_dist": max_Cb_dist,
         "valid_res_frac": valid_res_frac,
+        "displacement": displacement,
     }
     score_info.update(rosetta_stats)
 
@@ -708,15 +748,19 @@ def safe_run(p: Protein, mode: str = "pack"):
         elif mode == "minimize-cart":
             return minimize_task(p, True)
         elif mode == "reduce":
-            return run_reduce(p, his=True, flip=False)
+            out_pdb = run_reduce(p.to_pdb(unk_to_gly=True), his=True, flip=False)
+            red_p = Protein.from_pdb_string(out_pdb, discard_Hs=False).pad(n=p.n_res)
+            if hasattr(p, "pack_time"):
+                red_p.pack_time = p.pack_time
+            return red_p
         elif mode == "hydride":
             return run_hydride(p)
         elif mode == "pdb2pqr":
             return run_pdb2pqr(p)
         else:
             return minimize_task(p, False)
-    except Exception:
-        print(f"Job distributor failed to run {mode} on {p}, returning unpacked protein.")
+    except Exception as e:
+        print(f"Job distributor failed to run {mode} on {p} ({type(e).__name__}: {e}), returning unpacked protein.")
         return p
 
 
@@ -885,19 +929,83 @@ def calc_seq_rec_batched(
     assert (pred_seq != rc.restype_num).sum() == (true_seq != rc.restype_num).sum()
 
     # Calculate pos recovery per sample
+    # NOTE: scatter with reduce="sum" on a bool tensor stays bool (saturates at True),
+    # so all summed quantities below must be cast to float first.
     mask = true_pos.clone()
     pos_rec_per_samp = scatter(
-        pred_pos[mask] == true_pos[mask], aatype_batch[mask], dim=0, reduce="sum"
+        (pred_pos[mask] == true_pos[mask]).to(torch.float32), aatype_batch[mask], dim=0, reduce="sum"
     )  # [B]
-    pos_per_samp = scatter(pred_pos, aatype_batch, dim=0, reduce="sum")  # [B]
+    pos_per_samp = scatter(pred_pos.to(torch.float32), aatype_batch, dim=0, reduce="sum")  # [B]
     pos_rec = pos_rec_per_samp / (pos_per_samp + 1e-8)  # [B]
 
     # Calculate seq recovery per sample
     rec_mask = (pred_seq[mask] == true_seq[mask]) * (pred_pos[mask] == true_pos[mask])
-    seq_rec_per_samp = scatter(rec_mask, aatype_batch[mask], dim=0, reduce="sum")  # [B]
+    seq_rec_per_samp = scatter(rec_mask.to(torch.float32), aatype_batch[mask], dim=0, reduce="sum")  # [B]
     seq_rec = seq_rec_per_samp / (pos_per_samp + 1e-8)  # [B]
 
     return pos_rec, seq_rec
+
+
+def calc_unordered_seq_rec_batched(
+    pred_pos: torch.tensor,
+    true_pos: torch.tensor,
+    pred_seq: torch.tensor,
+    true_seq: torch.tensor,
+    aatype_batch: torch.tensor,
+) -> torch.tensor:
+    """
+    Calculates unordered (position-agnostic) seq recovery on batched predictions.
+
+    Unlike calc_seq_rec_batched, this ignores which specific position each residue
+    was assigned to and instead checks whether the predicted network's multiset of
+    residue types matches the native network's multiset of residue types.
+
+    Arguments:
+        pred_pos (torch.tensor): Predicted position vector of shape [L] for the full batch.
+        true_pos (torch.tensor): True position vector of shape [L] for the full batch.
+        pred_seq (torch.tensor): Predicted seq vector of shape [L] for the full batch.
+        true_seq (torch.tensor): True seq vector of shape [L] for the full batch.
+        aatype_batch (torch.tensor): Batch indexing vector of shape [L] for scatter ops.
+
+    Returns:
+        torch.tensor: unordered seq recovery of each sample, shaped [B].
+    """
+    # Check that vectors are comparable
+    assert (
+        pred_pos.numel()
+        == true_pos.numel()
+        == pred_seq.numel()
+        == true_seq.numel()
+        == aatype_batch.numel()
+    )
+    num_graphs = int(aatype_batch.max().item()) + 1
+
+    # Count occurrences of each aatype per sample by flattening (sample, aatype) into
+    # a single scatter index, for both the true and predicted networks
+    true_idx = aatype_batch[true_pos] * rc.restype_num + true_seq[true_pos]
+    true_counts = scatter(
+        torch.ones_like(true_idx, dtype=torch.float32),
+        true_idx,
+        dim=0,
+        reduce="sum",
+        dim_size=num_graphs * rc.restype_num,
+    ).view(num_graphs, rc.restype_num)
+
+    pred_idx = aatype_batch[pred_pos] * rc.restype_num + pred_seq[pred_pos]
+    pred_counts = scatter(
+        torch.ones_like(pred_idx, dtype=torch.float32),
+        pred_idx,
+        dim=0,
+        reduce="sum",
+        dim_size=num_graphs * rc.restype_num,
+    ).view(num_graphs, rc.restype_num)
+
+    # Multiset intersection: for each sample, how many residues of each aatype
+    # are shared between the predicted and native networks, regardless of position
+    matched_per_samp = torch.minimum(true_counts, pred_counts).sum(dim=1)  # [B]
+    pos_per_samp = scatter(pred_pos.float(), aatype_batch, dim=0, reduce="sum", dim_size=num_graphs)  # [B]
+    unordered_seq_rec = matched_per_samp / (pos_per_samp + 1e-8)  # [B]
+    return unordered_seq_rec
 
 
 def initialize_rosetta(mode: str = "fast", seed: int = None) -> None:

@@ -59,13 +59,15 @@ class HBPackerDataset(HBDesignerDataset):
     def __init__(self, cfg: TrainConfig, split: str = "train"):
         super().__init__(cfg, split)
 
-    def featurize(self, p: Protein, hbnet_arr: np.ndarray) -> gd.Data:
+    def featurize(self, p: Protein, hbnet_arr: np.ndarray, pdb_ch: str = "") -> gd.Data:
         """
         Featurize Protein and Graph info into HBPacker model inputs.
 
         Arguments:
             p (Protein): Protein object.
             hbnet_arr (np.ndarray): Copy of p.aatype with all non network residues set to GLY.
+            pdb_ch (str): PDB chain identifier (e.g. "1ABC_A") this sample was drawn from,
+                carried through purely for bookkeeping/logging. Defaults to "".
 
         Returns:
             gd.Data: torch_geometric Data object with featurized protein.
@@ -171,9 +173,12 @@ class HBPackerDataset(HBDesignerDataset):
             ),  # [L, 4, 2]
             # Masks and cond info
             chi_mask=torch.from_numpy(chi_mask).to(torch.float32),  # [L]
+            # No symmetry info available here; treat each packable residue as its own group
+            symmetry_idx=torch.arange(chi_mask_bool.sum(), dtype=torch.long),  # [n_packable]
         )
 
         protein_data["c_idx"] = protein_data["chain_index"]
+        protein_data["pdb_ch"] = pdb_ch
         return protein_data
 
     @staticmethod
@@ -284,10 +289,13 @@ class HBPackerDataset(HBDesignerDataset):
                     torch.float32
                 ),  # [L, 4]
                 chi_mask=torch.from_numpy(chi_mask).to(torch.float32),  # [L]
+                # No symmetry info available here; treat each packable residue as its own group
+                symmetry_idx=torch.arange(chi_mask_bool.sum(), dtype=torch.long),  # [n_packable]
             )
             protein_data["c_idx"] = protein_data["chain_index"]
             protein_data["guide_atom_xyz"] = b_i.guide_atom_xyz
             protein_data["aatype_cond"] = b_i.aatype_cond
+            protein_data["pdb_ch"] = b_i.pdb_ch
             protein_data_list.append(protein_data)
 
         return protein_data_list
@@ -472,6 +480,9 @@ class HBPackerTrainer(HBDesignerTrainer):
                 else:
                     test_info[key].append(value)
 
+            # Track which PDB/chain each row came from
+            test_info.setdefault("pdb_ch", []).append(b_c.pdb_ch)
+
         return test_info, proteins
 
     @torch.no_grad()
@@ -537,13 +548,18 @@ class HBPackerTrainer(HBDesignerTrainer):
         # Take mean for each metric
         if verbose:
             df = pd.DataFrame.from_dict(valid_info)
-            df.to_csv("hbdes_eval_data.csv")
+            df.to_csv("hbpacker_eval_data.csv")
+
+        # Identifier column, not a metric to average
+        valid_info.pop("pdb_ch", None)
 
         for k, v in valid_info.items():
-            v = np.array(v)
+            # astype(float) turns None entries (e.g. displacement w/o a guide atom) into NaN
+            v = np.array(v).astype(float)
             if first_n is not None:
                 v = v[:first_n]
-            valid_info[k] = np.nanmean(v)
+            with np.errstate(invalid="ignore"):
+                valid_info[k] = np.nanmean(v)
 
         valid_info["n_samples"] = first_n
         return valid_info
@@ -667,14 +683,18 @@ class HBPackerTrainer(HBDesignerTrainer):
         pack_info = {}
         # Collect true and pred chi values
         true_chi_rad = sincos_to_angle(b.chi_sincos_gt)
-        p_mask = p.atom27_mask[:, 5] != 0
-        pred_coords = torch.from_numpy(p.atom27_xyz[p_mask, :14]).to(torch.float32)
+        # Network positions. Packing never reorders/drops residues, so this mask
+        # (from the pre-packing batch) lines up 1:1 with p's residues. We rely on
+        # this instead of p.atom27_mask[:, 5] != 0, which under-selects whenever a
+        # native network residue's sidechain past CB is unresolved in the source PDB.
+        mask = b.chi_mask.bool()
+        mask_np = mask.numpy()
+        pred_coords = torch.from_numpy(p.atom27_xyz[mask_np, :14]).to(torch.float32)
         pred_chi_rad = calc_sc_dihedrals(
-            pred_coords, torch.from_numpy(p.aatype[p_mask]), return_mask=False
+            pred_coords, torch.from_numpy(p.aatype[mask_np]), return_mask=False
         )
 
         # Collect relevant chi mask
-        mask = b.chi_mask.bool()
         chi_mask = b.sc_dihedral_mask[mask]
         dev = next(self.model.parameters()).device
 

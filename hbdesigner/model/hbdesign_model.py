@@ -579,25 +579,29 @@ class HBDesigner(nn.Module):
         b: gd.Batch,
         res_sample_temp: float = 0.1,
         seq_sample_temp: float = 0.1,
+        ignore_seq_cond_mask: bool = False,
     ) -> Dict[str, torch.Tensor]:
-        """Currently used by Trainer.sample_batch in seq design mode"""
+        """Currently used by Trainer.sample_batch in seq design mode
 
-        # Clear all seq and sidechain info
-        b.aatype[:] = rc.restype_num
+        Args:
+            ignore_seq_cond_mask (bool): If True, don't hard-constrain sampling to the
+                specific aatype budget from seq cond. Sampling is still restricted to
+                the 11 HB-capable residues, but seq cond only informs the model via its
+                soft conditioning embedding rather than masking out disallowed aatypes.
+                Defaults to False (existing hard-constraint behavior).
+        """
+
+        # Clear sidechain info. Note: b.aatype and b.done_mask are left as-is, since any
+        # anchor residues (done_mask == 1) already carry their true aatype and must not
+        # be re-decoded below.
         b.atom14_xyz[:, 4:, :] = 0.0
         b.atom14_mask[:, 4:] = 0.0
 
-        # Revert masks back to start of decoding
-        net_sizes = (
-            scatter(b.nll_mask, b.aatype_batch, dim=0)
-            + scatter(b.done_mask, b.aatype_batch, dim=0)
-        ).long()
-        b.nll_mask[:] = 0
-        b.done_mask[:] = 0
-        b.net_res_num = net_sizes
+        # Only the not-yet-decided residues remain to be sampled; anchors are already done
+        b.net_res_num = scatter(b.nll_mask, b.aatype_batch, dim=0).long()
 
-        # Create initial sequence
-        seq = (rc.restype_num * torch.ones_like(b.aatype)).to(torch.long)  # [B]
+        # Create initial sequence: anchor residues keep their true aatype, rest start as UNK
+        seq = b.aatype.clone().to(torch.long)  # [B]
         net_res_probs = torch.zeros_like(b.aatype).to(torch.float32)  # [B]
         seq_probs = torch.zeros_like(b.aatype).to(torch.float32)  # [B]
 
@@ -716,7 +720,12 @@ class HBDesigner(nn.Module):
             seq_logits = self.seq_layer(protein_nodes[net_res])
 
             # For any samples w/seq cond, mask out all other logits to ensure correct aatype chosen
-            aatypes_not_allowed = (aatype_cond_counts <= 0.0).to(bool)
+            if ignore_seq_cond_mask:
+                # Still restrict to HB-capable residues, but don't hard-enforce the seq cond budget
+                aatypes_not_allowed = torch.ones_like(aatype_cond_counts, dtype=torch.bool)
+                aatypes_not_allowed[:, polars] = False
+            else:
+                aatypes_not_allowed = (aatype_cond_counts <= 0.0).to(bool)
             seq_logits[aatypes_not_allowed[net_res_mask]] = -torch.inf
 
             seq_pred, seq_p = self.sample_seq(
