@@ -81,6 +81,11 @@ if __name__ == "__main__":
         default=1,
         help="Number of repeats for error bars. Defaults to 1.",
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Whether to save per-network stats to a CSV (hbpacker_eval_data.csv). Defaults to False.",
+    )
     args = parser.parse_args()
     print("Args:", args)
 
@@ -134,7 +139,7 @@ if __name__ == "__main__":
             n_workers=args.num_workers,
             dump=args.dump,
             first_n=args.first_n,
-            verbose=False,
+            verbose=args.verbose,
         )
         t1 = time.time()
         elapsed = round(t1 - t0)

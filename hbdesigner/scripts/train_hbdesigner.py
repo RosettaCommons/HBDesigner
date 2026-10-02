@@ -160,7 +160,7 @@ class HBDesignerDataset(torch.utils.data.IterableDataset):
 
         if p.n_res > self.MAX_LENGTH:
             return None
-        return self.featurize(p, hbnet_arr)
+        return self.featurize(p, hbnet_arr, pdb_ch=pdb_ch)
 
     def _sample_native_net(
         self, p: Protein, g: nx.DiGraph
@@ -357,13 +357,15 @@ class HBDesignerDataset(torch.utils.data.IterableDataset):
         hbnet_arr = hbnet_arr[chain_mask]
         return p, hbnet_arr
 
-    def featurize(self, p: Protein, hbnet_arr: np.ndarray) -> gd.Data:
+    def featurize(self, p: Protein, hbnet_arr: np.ndarray, pdb_ch: str = "") -> gd.Data:
         """
         Featurize Protein and Graph info into HBDesigner model inputs.
 
         Arguments:
             p (Protein): Protein object.
             hbnet_arr (np.ndarray): Copy of p.aatype with all non network residues set to GLY.
+            pdb_ch (str): PDB chain identifier (e.g. "1ABC_A") this sample was drawn from,
+                carried through purely for bookkeeping/logging. Defaults to "".
 
         Returns:
             gd.Data: torch_geometric Data object with featurized protein.
@@ -494,6 +496,7 @@ class HBDesignerDataset(torch.utils.data.IterableDataset):
         )  # [1, 21]
 
         protein_data["c_idx"] = protein_data["chain_index"]
+        protein_data["pdb_ch"] = pdb_ch
         return protein_data
 
     @staticmethod
@@ -859,6 +862,9 @@ class HBDesignerTrainer(SupervisedTrainer):
                 else:
                     test_info[key].append(value)
 
+            # Track which PDB/chain each row came from
+            test_info.setdefault("pdb_ch", []).append(b_c.pdb_ch)
+
         return test_info, proteins
 
     @torch.no_grad()
@@ -939,11 +945,16 @@ class HBDesignerTrainer(SupervisedTrainer):
             df = pd.DataFrame.from_dict(valid_info)
             df.to_csv("hbdes_eval_data.csv")
 
+        # Identifier column, not a metric to average
+        valid_info.pop("pdb_ch", None)
+
         for k, v in valid_info.items():
-            v = np.array(v)
+            # astype(float) turns None entries (e.g. displacement w/o a guide atom) into NaN
+            v = np.array(v).astype(float)
             if first_n is not None:
                 v = v[:first_n]
-            valid_info[k] = np.nanmean(v)
+            with np.errstate(invalid="ignore"):
+                valid_info[k] = np.nanmean(v)
 
         valid_info["n_samples"] = first_n
         return valid_info

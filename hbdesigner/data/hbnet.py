@@ -3,6 +3,7 @@ from functools import partial
 from multiprocessing import Pool
 from typing import Dict, List, Sequence, Tuple, Optional
 import os
+import shutil
 import numpy as np
 import pyrosetta
 import time
@@ -32,8 +33,12 @@ import hbdesigner.data.residue_constants as rc
 from hbdesigner.data.features import impute_CB
 from hbdesigner.data.protein import Protein
 
-REDUCE_EXE=os.path.join(os.path.dirname(os.path.dirname(__file__)), "reduce/reduce_src/reduce")
-HET_DICT = os.path.join(os.path.dirname(os.path.dirname(__file__)), "reduce/reduce_wwPDB_het_dict.txt")
+# Reduce is installed via conda/pixi (see pyproject.toml); override with $REDUCE_EXE if it isn't on PATH
+REDUCE_EXE = os.environ.get("REDUCE_EXE") or shutil.which("reduce") or "reduce"
+HET_DICT = os.environ.get("REDUCE_HET_DICT") or os.path.join(
+    os.path.dirname(os.path.dirname(os.path.realpath(shutil.which(REDUCE_EXE) or REDUCE_EXE))),
+    "share/reduce/reduce_wwPDB_het_dict.txt",
+)
 
 
 def batch_to_proteins(batch: gd.Batch) -> Tuple[List[Protein], List[gd.Data]]:
@@ -200,7 +205,7 @@ def get_satisfaction(
 
 def rosetta_hbond_detect(
     p: Protein, max_energy: float = 0.0, optH: bool = True, optH_MCA: bool = True,
-) -> List[Tuple[int, int]]:
+) -> Tuple[List[Tuple[int, int]], List[Tuple[int, int]], Dict[str, float]]:
     """
     Detect Rosetta HBonds based on energy threshold.
 
@@ -209,6 +214,12 @@ def rosetta_hbond_detect(
         max_energy (float): Max energy to consider a 'valid' HBond. Larger is more permissive. Default is 0.0.
         optH (bool): Whether to let Rosetta re-optimize the hydrogens in the input Protein. Default is True.
         optH_MCA (bool): Whether to use more rigorous but slower optH MCA protocol. Default is True.
+
+    Returns:
+        pair_list (List[Tuple[int, int]]): (acc_res, don_res) pairs for sidechain-sidechain HBonds.
+        bb_sc_pair_list (List[Tuple[int, int]]): (acc_res, don_res) pairs for backbone-sidechain HBonds
+            (either the acceptor or the donor hydrogen is a backbone atom).
+        stats (Dict[str, float]): Energy/satisfaction stats for the pose.
     """
     t0 = time.time()
     # Configure scoring settings, if not already set
@@ -221,6 +232,7 @@ def rosetta_hbond_detect(
     # Set up polyG backbone for energy calc
     pose, polyG_pose = Pose(), Pose()
     pair_list = []
+    bb_sc_pair_list = []
     try:
         pose_from_pdbstring(pose, p.to_pdb(unk_to_gly=True))
         # Make PolyG pose for comparison
@@ -233,20 +245,24 @@ def rosetta_hbond_detect(
 
     except RuntimeError:
         print("Rosetta failed to accept PDB!")
-        return pair_list
+        return pair_list, bb_sc_pair_list, {}
 
     # Need to apply FA scorefxn to populate HBondSet
     scorefxn = get_fa_scorefxn()
     scorefxn(pose)
-    hbondset = pose.get_hbonds(exclude_bb=True, exclude_bsc=True, exclude_scb=True)
+    # Exclude bb-bb only here; sc-sc and bb-sc bonds are split below by atom identity
+    hbondset = pose.get_hbonds(exclude_bb=True)
     hbonds = hbondset.hbonds()
 
-    # Collect HBonds
+    # Collect HBonds, splitting sidechain-sidechain from backbone-sidechain
     for bond in hbonds:
         # Convert from Pose to Protein numbering
         acc_res = int(bond.acc_res()) - 1
         don_res = int(bond.don_res()) - 1
-        pair_list.append((acc_res, don_res))
+        if bond.acc_atm_is_backbone() or bond.don_hatm_is_backbone():
+            bb_sc_pair_list.append((acc_res, don_res))
+        else:
+            pair_list.append((acc_res, don_res))
 
     seq, seq_polyG = pose.sequence(), polyG_pose.sequence()
     net_idx = [i for i, (s, sg) in enumerate(zip(seq, seq_polyG)) if s != sg]
@@ -275,7 +291,7 @@ def rosetta_hbond_detect(
     stats.update(get_satisfaction(pose))
     t1 = time.time()
     stats["score_time"] = (t1 - t0)
-    return pair_list, stats
+    return pair_list, bb_sc_pair_list, stats
 
 
 def biotite_hbond_detect(
@@ -371,7 +387,7 @@ def score_protein(p: Protein) -> Dict[str, float]:
         guide_atom_xyz = p.hetatm_dict["atom_xyz"][guide_idx]
 
     # Get bonds and energy metrics from Rosetta
-    bond_list, rosetta_stats = rosetta_hbond_detect(
+    bond_list, bb_sc_bond_list, rosetta_stats = rosetta_hbond_detect(
         p,
         max_energy=0.0,
         optH=True,
@@ -393,7 +409,7 @@ def score_protein(p: Protein) -> Dict[str, float]:
     chains_used = np.unique(p.chain_index).size
     used_all_chains = float(chains_used == chains_total)
 
-    # Count motif nodes and edges
+    # Count motif nodes and edges (sidechain-sidechain HBonds)
     hbond_res = []
     for b in bond_list:
         hbond_res.extend(list(b))
@@ -401,6 +417,14 @@ def score_protein(p: Protein) -> Dict[str, float]:
     hbond_bonds = len(bond_list)
     total_res = p.n_res
     hbond_res_frac = hbond_res / total_res
+
+    # Same counts for backbone-sidechain HBonds
+    hbond_bb_sc_res = []
+    for b in bb_sc_bond_list:
+        hbond_bb_sc_res.extend(list(b))
+    hbond_bb_sc_res = np.unique(hbond_bb_sc_res).size
+    hbond_bb_sc_bonds = len(bb_sc_bond_list)
+    hbond_bb_sc_res_frac = hbond_bb_sc_res / total_res
 
     # Calculate max pairwise distance b/w motif Cb atoms
     bb_xyz = p.atom27_xyz[:, :4, :]
@@ -433,6 +457,9 @@ def score_protein(p: Protein) -> Dict[str, float]:
         "hbond_res_frac": hbond_res_frac,
         "hbond_res": hbond_res,
         "hbond_bonds": hbond_bonds,
+        "hbond_bb_sc_res_frac": hbond_bb_sc_res_frac,
+        "hbond_bb_sc_res": hbond_bb_sc_res,
+        "hbond_bb_sc_bonds": hbond_bb_sc_bonds,
         "chains_used": float(chains_used),
         "used_all_chains": used_all_chains,
         "total_res": total_res,
@@ -721,15 +748,19 @@ def safe_run(p: Protein, mode: str = "pack"):
         elif mode == "minimize-cart":
             return minimize_task(p, True)
         elif mode == "reduce":
-            return run_reduce(p, his=True, flip=False)
+            out_pdb = run_reduce(p.to_pdb(unk_to_gly=True), his=True, flip=False)
+            red_p = Protein.from_pdb_string(out_pdb, discard_Hs=False).pad(n=p.n_res)
+            if hasattr(p, "pack_time"):
+                red_p.pack_time = p.pack_time
+            return red_p
         elif mode == "hydride":
             return run_hydride(p)
         elif mode == "pdb2pqr":
             return run_pdb2pqr(p)
         else:
             return minimize_task(p, False)
-    except Exception:
-        print(f"Job distributor failed to run {mode} on {p}, returning unpacked protein.")
+    except Exception as e:
+        print(f"Job distributor failed to run {mode} on {p} ({type(e).__name__}: {e}), returning unpacked protein.")
         return p
 
 
