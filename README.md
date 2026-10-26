@@ -12,14 +12,19 @@ HBDesigner can be installed using `mamba`, `uv`, or `Pixi`.
 git clone https://github.com/RosettaCommons/HBDesigner.git
 cd HBDesigner/
 ```
+> **Note:** Use pip 26.2.2 or newer, uv 0.13.4 or newer, or pixi 0.82.1 or newer. Older versions still trust
+> the withdrawn emSign root CA certificate.
+
 To create a virtual environment with `mamba` for use on a GPU or CPU, respectively:
 ```
 # for running on a GPU
 mamba env create -f env_gpu.yaml
+python -m pip install --upgrade pip
 pip install .
 
 # for running on a CPU
 mamba env create -f env_cpu.yaml
+python -m pip install --upgrade pip
 pip install .
 ```
 To create a virtual environment with `uv` for use on a GPU or CPU respectively:
