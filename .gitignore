@@ -39,3 +39,6 @@ logs/
 # pixi environments
 .pixi/*
 !.pixi/config.toml
+
+.devcontainer/
+.devcontainer/*

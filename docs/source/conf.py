@@ -64,4 +64,8 @@ source_suffix = {
 
 html_js_files = [
     ('https://scripts.simpleanalyticscdn.com/latest.js', {'async': 'async', 'defer': 'defer'}),
+    "page_feedback.js",
+]
+html_css_files = [
+    "page_feedback.css",
 ]
